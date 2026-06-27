@@ -222,15 +222,21 @@ Write a comprehensive, professional implementation whitepaper covering:
 
 Format this as a proper markdown document with headings, code blocks, and tables where appropriate. Be thorough and specific — this is a real implementation blueprint.`;
 
-  const response = await generate(LARGE_MODEL, prompt);
 
   const docDir = join(homedir(), 'Documents');
   docPath = join(docDir, `${slugify(projectName)}-whitepaper.md`);
   mkdirSync(docDir, { recursive: true });
-  writeFileSync(docPath, `# ${projectName} — Implementation Blueprint\n\n## Concept\n\n${concept}\n\n---\n\n${response}`, 'utf-8');
-  console.log(`\n✅ Whitepaper saved to: ${docPath}`);
-  whitepaperContent = response
-  return docPath;
+  if (existsSync(docPath)) {
+    console.log(`⚠️  Whitepaper already exists: ${docPath}`);
+    main()
+    return ''
+  } else {
+    const response = await generate(LARGE_MODEL, prompt);
+    writeFileSync(docPath, `# ${projectName} — Implementation Blueprint\n\n## Concept\n\n${concept}\n\n---\n\n${response}`, 'utf-8');
+    console.log(`\n✅ Whitepaper saved to: ${docPath}`);
+    whitepaperContent = response
+    return docPath;
+  }
 }
 
 // ─── Step 3: Create project folder ──────────────────────────────────────────
@@ -245,6 +251,8 @@ async function step3CreateProjectFolder(projectName) {
 
   if (existsSync(projectPath)) {
     console.log(`⚠️  Project folder already exists: ${projectPath}`);
+    main()
+    return {}
   } else {
     mkdirSync(projectPath, { recursive: true });
     console.log(`✅ Created project folder: ${projectPath}`);
