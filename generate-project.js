@@ -62,15 +62,49 @@ const PROMPT_PREFIX = env.PROMPT_PREFIX || 'A modern web application that';
 
 const ollama = new Ollama({ host: OLLAMA_HOST });
 
-async function generate(model, prompt) {
+const REQUEST_TIMEOUT = 300000; // 5 minutes
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 10000; // 10 seconds
+
+async function generateWithRetry(model, prompt, retries = MAX_RETRIES) {
   console.log(`\n🤖 Querying model "${model}"...`);
-  const response = await ollama.generate({
-    model,
-    prompt,
-    options: { temperature: 0.7 },
-  });
-  return response.response.trim();
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
+      const response = await ollama.generate({
+        model,
+        prompt,
+        options: { temperature: 0.7 },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+      return response.response.trim();
+    } catch (err) {
+      const isLastAttempt = attempt === retries;
+      const isTimeout = err.name === 'AbortError' || err.code === 'UND_ERR_HEADERS_TIMEOUT';
+
+      if (isTimeout) {
+        console.warn(`⏰ Request timed out after ${REQUEST_TIMEOUT / 1000}s (attempt ${attempt}/${retries})`);
+      } else {
+        console.warn(`⚠️ Request failed: ${err.message} (attempt ${attempt}/${retries})`);
+      }
+
+      if (isLastAttempt) {
+        console.error(`❌ All ${retries} attempts failed for model "${model}"`);
+        throw err;
+      }
+
+      const delay = RETRY_DELAY * attempt;
+      console.log(`🔄 Retrying in ${delay / 1000}s...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
 }
+
+const generate = generateWithRetry;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -91,7 +125,7 @@ function runSilent(cmd, opts = {}) {
   return execSync(cmd, { encoding: 'utf-8', ...opts }).trim();
 }
 
-// ─── Step 1: Generate project name & concept ──────────���─────────────────────
+// ─── Step 1: Generate project name & concept ──────────────────────────────────
 
 async function step1GenerateConcept() {
   console.log('\n' + '='.repeat(60));
