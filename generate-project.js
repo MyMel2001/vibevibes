@@ -196,7 +196,7 @@ CONCEPT: <one-paragraph description>`;
 // ─── Step 2: Generate whitepaper ────────────────────────────────────────────
 
 let whitepaperContent = ''
-
+let docPath = ''
 async function step2GenerateWhitepaper(projectName, concept) {
   console.log('\n' + '='.repeat(60));
   console.log('📄 STEP 2: Generating implementation whitepaper');
@@ -225,7 +225,7 @@ Format this as a proper markdown document with headings, code blocks, and tables
   const response = await generate(LARGE_MODEL, prompt);
 
   const docDir = join(homedir(), 'Documents');
-  const docPath = join(docDir, `${slugify(projectName)}-whitepaper.md`);
+  docPath = join(docDir, `${slugify(projectName)}-whitepaper.md`);
   mkdirSync(docDir, { recursive: true });
   writeFileSync(docPath, `# ${projectName} — Implementation Blueprint\n\n## Concept\n\n${concept}\n\n---\n\n${response}`, 'utf-8');
   console.log(`\n✅ Whitepaper saved to: ${docPath}`);
@@ -263,7 +263,7 @@ async function step4RunOpencode(projectName, concept, projectPath) {
   const prompt = `Create project with these specs: ${concept}`;
 
   // Run opencode in the background so we can capture its PID and wait for it
-  const cmd = `cd "${projectPath}" && OLLAMA_HOST="${OLLAMA_HOST}" nohup ollama launch opencode --model "${LARGE_MODEL}" -- --prompt="${prompt}. IMPORTANT: Make sure the project is 100% complete and includes all features, a .gitignore, and a README. No placeholder/incomplete functions are allowed. Be sure example .env file is named ".env.example"! Make sure everything is complete and functional, test the code at the end, and if it doesn't work fix it, test it again, and do this over and over until it works. Private project blueprint contents: ${whitepaperContent.split('\n').join(' ').split('"').join(' ').split('(').join(' ').split(')').join(' ')}" > "${projectPath}/opencode.log" 2>&1 & echo $!`;
+  const cmd = `cd "${projectPath}" && OLLAMA_HOST="${OLLAMA_HOST}" nohup ollama launch opencode --model "${LARGE_MODEL}" -- --prompt="${prompt}. IMPORTANT: Make sure the project is 100% complete and includes all features, a .gitignore, and a README. No placeholder/incomplete functions are allowed. Be sure example .env file is named ".env.example"! Make sure everything is complete and functional, test the code at the end, and if it doesn't work fix it, test it again, and do this over and over until it works. Private project blueprint contents are @${docPath} ." > "${projectPath}/opencode.log" 2>&1 & echo $!`;
 
   console.log(`\nRunning in: ${projectPath}`);
   console.log(`Command: ${cmd}`);
