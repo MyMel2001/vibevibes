@@ -9,4 +9,4 @@ nvm install 24
 nvm use 24
 
 npm i
-node server.js > autocode.log 2>&1 &
+node generate-project.js > autocode.log 2>&1 &
