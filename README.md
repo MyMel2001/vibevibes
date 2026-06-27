@@ -1,6 +1,6 @@
-# 🤖 VibeVibes - Coding projects at AI speed!
+# 🤖 AI Project Generator
 
-An automated pipeline that uses **Ollama + LLMs** to continuously generate, scaffold, and publish full-stack projects to GitHub — complete with implementation whitepapers.
+An automated pipeline that uses **Ollama + local LLMs** to continuously generate, scaffold, and publish full-stack projects to GitHub — complete with implementation whitepapers.
 
 ## How It Works
 
@@ -62,6 +62,20 @@ cp .env.example .env
 
 The script will loop forever, generating one project after another. Press `Ctrl+C` to stop.
 
+### Background mode
+
+Use the provided [`run-bg.sh`](run-bg.sh) script to run it as a background daemon:
+
+```bash
+./run-bg.sh
+```
+
+This will:
+1. Pull the latest code from git
+2. Ensure Node.js 24 is active via nvm
+3. Install dependencies
+4. Launch the generator in the background, logging to `autocode.log`
+
 ## What Gets Generated
 
 ### Per project
@@ -95,7 +109,7 @@ The large model produces a 10-section blueprint:
 | Whitepaper | `LARGE_MODEL` | Deep architectural reasoning — needs more capacity |
 | opencode scaffold | `LARGE_MODEL` | Code generation — needs strong coding ability |
 
-The Ollama official npm library (`ollama.generate()`) is used for steps 1–2. The opencode step shells out to `ollama launch opencode` directly.
+The [Ollama official npm library](https://www.npmjs.com/package/ollama) (`ollama.generate()`) is used for steps 1–2. The opencode step shells out to `ollama launch opencode` directly.
 
 ## GitHub Publishing
 
@@ -114,10 +128,12 @@ The script:
 
 ```
 vibevibes/
-├── .env.example      # Configuration template
-├── generate-project.js  # The main script
-├── package.json      # ESM + ollama dependency
-└── README.md         # This file
+├── .env.example          # Configuration template
+├── .gitignore            # Ignores .env and node_modules/
+├── generate-project.js   # The main script (ESM)
+├── package.json          # ESM + ollama dependency
+├── run-bg.sh             # Background daemon launcher
+└── README.md             # This file
 ```
 
 ## Customization
@@ -126,6 +142,27 @@ vibevibes/
 - **Use different models** — swap `SMALL_MODEL` / `LARGE_MODEL` in `.env`
 - **Adjust whitepaper structure** — edit the prompt in `step2GenerateWhitepaper()`
 - **Change output directories** — modify `homedir()` paths in the step functions
+
+## Troubleshooting
+
+### `MODULE_NOT_FOUND` errors
+
+If you see CJS resolution errors, make sure you're running the script directly with Node.js (not via a wrapper that changes the working directory):
+
+```bash
+# ✅ Correct
+cd /path/to/vibevibes && node generate-project.js
+
+# The run-bg.sh script handles this automatically
+```
+
+### Ollama connection issues
+
+Ensure Ollama is running and reachable at the `OLLAMA_HOST` address:
+
+```bash
+curl $OLLAMA_HOST/api/tags
+```
 
 ## License
 
