@@ -1,6 +1,6 @@
 # 🤖 VibeVibes
 
-***Code at the speed of AI!***
+***Coding at the speed of AI!***
 
 An automated pipeline that uses **Ollama + LLMs** to continuously generate, scaffold, and publish full-stack projects to GitHub — complete with implementation whitepapers.
 
