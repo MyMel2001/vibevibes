@@ -333,17 +333,37 @@ async function step5PublishToGitHub(projectName, projectPath) {
   // Configure git remote with token embedded for auth, then push
   console.log('\n📦 Initializing git and pushing...');
 
-  const authUrl = `https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/${owner}/${repoName}.git`;
+  const authUrl = `https://${owner}:${GITHUB_TOKEN}@github.com/${owner}/${repoName}.git`;
+
+  // Ensure git user is configured (required for `git commit` to succeed)
+  let hasUserConfig = false;
+  try {
+    const name = runSilent('git config user.name', { cwd: projectPath });
+    const email = runSilent('git config user.email', { cwd: projectPath });
+    hasUserConfig = !!(name && email);
+  } catch {
+    hasUserConfig = false;
+  }
 
   const commands = [
-    `cd "${projectPath}"`,
     'git init',
     'git add .',
+  ];
+
+  if (!hasUserConfig) {
+    console.log('⚙️  Git user not configured globally — setting temporary commit author');
+    commands.push(
+      'git config user.name "AI Project Generator"',
+      'git config user.email "ai@project-generator.local"',
+    );
+  }
+
+  commands.push(
     `git commit -m "Initial commit: ${projectName}"`,
-    `git remote add origin ${authUrl}`,
+    `git remote add origin ${authUrl} 2>/dev/null; git remote set-url origin ${authUrl}`,
     'git branch -M main',
     'git push -u origin main',
-  ];
+  );
 
   for (const cmd of commands) {
     try {
