@@ -1,6 +1,8 @@
-# 🤖 AI Project Generator
+# 🤖 VibeVibes
 
-An automated pipeline that uses **Ollama + local LLMs** to continuously generate, scaffold, and publish full-stack projects to GitHub — complete with implementation whitepapers.
+***Code at the speed of AI!***
+
+An automated pipeline that uses **Ollama + LLMs** to continuously generate, scaffold, and publish full-stack projects to GitHub — complete with implementation whitepapers.
 
 ## How It Works
 
