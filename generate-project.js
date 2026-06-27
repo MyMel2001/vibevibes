@@ -166,7 +166,7 @@ async function step1GenerateConcept() {
   console.log('📋 STEP 1: Generating project name & concept');
   console.log('='.repeat(60));
 
-  const prompt = `You are a creative product strategist. Based on the following seed idea, come up with a unique, catchy project name (one or two words, no existing well-known names) and a one-paragraph concept description.
+  const prompt = `You are a creative product strategist. Based on the following seed idea, come up with a unique, catchy project name (one or two words, no existing well-known names) and a one-paragraph concept description. Make sure the project name and concept are original and aren't repetative or redundant (i.e. don't spam "Node" this or "Flux" that in names - use names relevant yet catchy and unique.).
 
 Seed idea: ${PROMPT_PREFIX}
 
