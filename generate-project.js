@@ -288,6 +288,81 @@ async function step4RunOpencode(projectName, concept, projectPath) {
 
 // ─── Step 5: Publish to GitHub via git CLI ──────────────────────────────────
 
+/**
+ * Retry a GitHub API curl call with exponential backoff.
+ * Handles transient failures (network blips, rate limiting, 5xx).
+ */
+async function curlGitHubWithRetry(apiUrl, body, maxRetries = 3) {
+  const escapedBody = body.replace(/'/g, "'\\''");
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = execSync(
+        `curl -s -X POST "${apiUrl}" \
+          -H "Authorization: token ${GITHUB_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d '${escapedBody}'`,
+        { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
+      );
+
+      const parsed = JSON.parse(result);
+
+      // Check for API-level errors
+      if (parsed.errors) {
+        const messages = parsed.errors.map(e => e.message).join(', ');
+        console.error(`❌ GitHub API error: ${messages}`);
+        console.error('   Full response:', JSON.stringify(parsed, null, 2));
+        return null;
+      }
+
+      // Check for rate limiting
+      if (parsed.message && parsed.message.toLowerCase().includes('rate limit')) {
+        const isLast = attempt === maxRetries;
+        console.warn(`⚠️  Rate limited by GitHub API (attempt ${attempt}/${maxRetries})`);
+        if (isLast) {
+          console.error('❌ All retries exhausted due to rate limiting. Try again later.');
+          return null;
+        }
+        const delay = Math.min(60000 * attempt, 120000); // 60s, 120s, 120s
+        console.log(`🔄 Waiting ${delay / 1000}s before retrying...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+
+      return parsed;
+    } catch (err) {
+      const isLast = attempt === maxRetries;
+
+      // execSync throws on non-zero exit — curl may have gotten a 4xx/5xx
+      const stderr = err.stderr || '';
+      const stdout = err.stdout || '';
+
+      // Try to parse stdout as JSON for a meaningful error message
+      let apiMessage = '';
+      try {
+        const parsed = JSON.parse(stdout);
+        apiMessage = parsed.message || (parsed.errors && parsed.errors[0] && parsed.errors[0].message) || '';
+      } catch { /* not JSON */ }
+
+      const context = apiMessage || stderr.slice(0, 200) || err.message;
+      console.warn(`⚠️  GitHub API request failed: ${context} (attempt ${attempt}/${maxRetries})`);
+
+      if (isLast) {
+        console.error(`❌ All ${maxRetries} attempts failed for GitHub API.`);
+        if (stdout) {
+          console.error('   Response body:', stdout.slice(0, 500));
+        }
+        return null;
+      }
+
+      const delay = Math.min(5000 * Math.pow(2, attempt - 1), 60000); // 5s, 10s, 20s
+      console.log(`🔄 Retrying in ${delay / 1000}s...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  return null;
+}
+
 async function step5PublishToGitHub(projectName, projectPath) {
   console.log('\n' + '='.repeat(60));
   console.log('🐙 STEP 5: Publishing to GitHub via git CLI');
@@ -321,18 +396,9 @@ async function step5PublishToGitHub(projectName, projectPath) {
 
   console.log(`\n📡 Creating GitHub repository "${owner}/${repoName}"...`);
 
-  const result = execSync(
-    `curl -s -X POST "${apiUrl}" \
-      -H "Authorization: token ${GITHUB_TOKEN}" \
-      -H "Content-Type: application/json" \
-      -d '${body.replace(/'/g, "'\\''")}'`,
-    { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
-  );
-
-  const parsed = JSON.parse(result);
-  if (parsed.errors) {
-    console.error(`❌ GitHub API error: ${parsed.errors.map(e => e.message).join(', ')}`);
-    console.error('   Full response:', JSON.stringify(parsed, null, 2));
+  const parsed = await curlGitHubWithRetry(apiUrl, body);
+  if (!parsed) {
+    console.error('❌ Failed to create GitHub repository. Skipping publish.');
     return;
   }
 
