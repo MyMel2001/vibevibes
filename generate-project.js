@@ -170,7 +170,7 @@ async function step1GenerateConcept() {
 
 Seed idea: ${PROMPT_PREFIX}
 
-Respond in this exact format:
+Respond in this VERY EXACT format:
 PROJECT_NAME: <name>
 CONCEPT: <one-paragraph description>`;
 
