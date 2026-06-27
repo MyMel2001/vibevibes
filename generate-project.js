@@ -190,12 +190,12 @@ async function step4RunOpencode(projectName, concept, projectPath) {
 
   const prompt = `Create project with these specs: ${concept}`;
 
-  const cmd = `OLLAMA_HOST="${OLLAMA_HOST}" ollama launch opencode --model "${LARGE_MODEL}" -- --prompt="${prompt}. IMPORTANT: Make sure the project is 100% complete and includes all features and a README. No placeholder/incomplete functions are allowed."`;
+  const cmd = `cd "${projectPath}" && OLLAMA_HOST="${OLLAMA_HOST}" ollama launch opencode --model "${LARGE_MODEL}" -- --prompt="${prompt}. IMPORTANT: Make sure the project is 100% complete and includes all features and a README. No placeholder/incomplete functions are allowed."`;
 
   console.log(`\nRunning in: ${projectPath}`);
   console.log(`Command: ${cmd}`);
 
-  run(cmd, { cwd: projectPath });
+  run(cmd);
   console.log(`\n✅ opencode completed in: ${projectPath}`);
 }
 
@@ -259,6 +259,7 @@ async function step5PublishToGitHub(projectName, projectPath) {
   const authUrl = `https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/${owner}/${repoName}.git`;
 
   const commands = [
+    `cd "${projectPath}"`,
     'git init',
     'git add .',
     `git commit -m "Initial commit: ${projectName}"`,
