@@ -125,6 +125,40 @@ function runSilent(cmd, opts = {}) {
   return execSync(cmd, { encoding: 'utf-8', ...opts }).trim();
 }
 
+/**
+ * Wait for a process (by PID) to finish by polling `ps`.
+ * Polls every POLL_INTERVAL ms until the process exits or TIMEOUT ms elapses.
+ */
+function waitForProcess(pid, label = 'process', pollInterval = 15000, timeout = 1800000) {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    console.log(`⏳ Waiting for ${label} (PID ${pid}) to complete...`);
+
+    const interval = setInterval(() => {
+      try {
+        // Check if process is still running via ps
+        execSync(`ps -p ${pid}`, { encoding: 'utf-8', stdio: 'pipe' });
+        // Process still alive
+        const elapsed = ((Date.now() - start) / 1000).toFixed(0);
+        process.stdout.write(`\r⏳ ${label} still running... (${elapsed}s elapsed)`);
+      } catch {
+        // ps -p <pid> exits non-zero when process is not found → it's done
+        clearInterval(interval);
+        clearTimeout(fallbackTimeout);
+        const elapsed = ((Date.now() - start) / 1000).toFixed(0);
+        console.log(`\n✅ ${label} (PID ${pid}) finished after ${elapsed}s`);
+        resolve();
+      }
+    }, pollInterval);
+
+    const fallbackTimeout = setTimeout(() => {
+      clearInterval(interval);
+      console.log(`\n⚠️  Timed out waiting for ${label} (PID ${pid}) after ${timeout / 1000}s`);
+      resolve(); // resolve anyway so the pipeline can continue
+    }, timeout);
+  });
+}
+
 // ─── Step 1: Generate project name & concept ──────────────────────────────────
 
 async function step1GenerateConcept() {
@@ -226,12 +260,19 @@ async function step4RunOpencode(projectName, concept, projectPath) {
 
   const prompt = `Create project with these specs: ${concept}`;
 
-  const cmd = `cd "${projectPath}" && OLLAMA_HOST="${OLLAMA_HOST}" ollama launch opencode --model "${LARGE_MODEL}" -- --prompt="${prompt}. IMPORTANT: Make sure the project is 100% complete and includes all features and a README. No placeholder/incomplete functions are allowed."`;
+  // Run opencode in the background so we can capture its PID and wait for it
+  const cmd = `cd "${projectPath}" && OLLAMA_HOST="${OLLAMA_HOST}" nohup ollama launch opencode --model "${LARGE_MODEL}" -- --prompt="${prompt}. IMPORTANT: Make sure the project is 100% complete and includes all features and a README. No placeholder/incomplete functions are allowed. Make sure everything is complete and functional, test the code at the end, and if it doesn't work fix it, test it again, and do this over and over until it works." > "${projectPath}/opencode.log" 2>&1 & echo $!`;
 
   console.log(`\nRunning in: ${projectPath}`);
   console.log(`Command: ${cmd}`);
 
-  run(cmd);
+  // Capture the PID of the backgrounded opencode process
+  const pid = runSilent(cmd);
+  console.log(`\n🚀 opencode launched in background (PID: ${pid})`);
+
+  // Wait for the opencode process to finish before proceeding
+  await waitForProcess(pid, 'opencode', 15000, 1800000);
+
   console.log(`\n✅ opencode completed in: ${projectPath}`);
 }
 
