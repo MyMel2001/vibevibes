@@ -10,4 +10,4 @@ nvm use 24
 
 npm i
 
-while true; do; node generate-project.js; done > autocode.log 2>&1 &
+while true; do node generate-project.js; done > autocode.log 2>&1 &
