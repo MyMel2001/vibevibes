@@ -53,8 +53,12 @@ const env = loadEnv(envPath);
 const OLLAMA_HOST = env.OLLAMA_HOST || 'http://localhost:11434';
 const SMALL_MODEL = env.SMALL_MODEL || 'llama3.2:3b';
 const LARGE_MODEL = env.LARGE_MODEL || 'qwen2.5-coder:14b';
-const GITHUB_USER = env.GITHUB_USER || '';
 const GITHUB_ORG = env.GITHUB_ORG || '';
+if (GITHUB_USER != "") {
+  const GITHUB_USER = env.GITHUB_USER || '';
+} else {
+  const GITHUB_USER = GITHUB_ORG || '';
+}
 const GITHUB_TOKEN = env.GITHUB_TOKEN || '';
 const PROMPT_PREFIX = env.PROMPT_PREFIX || 'A modern web application that';
 
