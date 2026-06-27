@@ -154,7 +154,9 @@ Format this as a proper markdown document with headings, code blocks, and tables
 
   const response = await generate(LARGE_MODEL, prompt);
 
-  const docPath = join(homedir(), 'Documents', `${slugify(projectName)}-whitepaper.md`);
+  const docDir = join(homedir(), 'Documents');
+  const docPath = join(docDir, `${slugify(projectName)}-whitepaper.md`);
+  mkdirSync(docDir, { recursive: true });
   writeFileSync(docPath, `# ${projectName} — Implementation Blueprint\n\n## Concept\n\n${concept}\n\n---\n\n${response}`, 'utf-8');
   console.log(`\n✅ Whitepaper saved to: ${docPath}`);
 
