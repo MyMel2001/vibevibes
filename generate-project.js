@@ -153,8 +153,14 @@ function waitForProcess(pid, label = 'process', pollInterval = 15000, timeout = 
 
     const fallbackTimeout = setTimeout(() => {
       clearInterval(interval);
-      console.log(`\n⚠️  Timed out waiting for ${label} (PID ${pid}) after ${timeout / 1000}s`);
-      resolve(); // resolve anyway so the pipeline can continue
+      console.log(`\n⚠️  Timed out waiting for ${label} (PID ${pid}) after ${timeout / 1000}s — killing process`);
+      try {
+        process.kill(pid, 'SIGTERM');
+        console.log(`🔪 Killed ${label} (PID ${pid})`);
+      } catch (killErr) {
+        console.warn(`⚠️  Could not kill ${label} (PID ${pid}): ${killErr.message}`);
+      }
+      resolve();
     }, timeout);
   });
 }
