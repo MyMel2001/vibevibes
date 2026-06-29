@@ -168,4 +168,4 @@ curl $OLLAMA_HOST/api/tags
 
 ## License
 
-MIT
+SPL-R5
