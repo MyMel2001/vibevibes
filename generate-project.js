@@ -53,6 +53,7 @@ const env = loadEnv(envPath);
 const OLLAMA_HOST = env.OLLAMA_HOST || 'http://localhost:11434';
 const SMALL_MODEL = env.SMALL_MODEL || 'llama3.2:3b';
 const LARGE_MODEL = env.LARGE_MODEL || 'qwen2.5-coder:14b';
+const MEDIUM_MODEL = env.MEDIUM_MODEL || env.LARGE_MODEL || 'qwen2.5-coder:14b';
 const GITHUB_ORG = env.GITHUB_ORG || '';
 const GITHUB_USER = env.GITHUB_USER || env.GITHUB_ORG || '';
 const GITHUB_TOKEN = env.GITHUB_TOKEN || '';
@@ -237,7 +238,7 @@ Format this as a proper markdown document with headings, code blocks, and tables
     main()
     return ''
   } else {
-    const response = await generate(LARGE_MODEL, prompt);
+    const response = await generate(MEDIUM_MODEL, prompt);
     writeFileSync(docPath, `# ${projectName} — Implementation Blueprint\n\n## Concept\n\n${concept}\n\n---\n\n${response}`, 'utf-8');
     console.log(`\n✅ Whitepaper saved to: ${docPath}`);
     whitepaperContent = response
@@ -278,6 +279,27 @@ async function step4RunOpencode(projectName, concept, projectPath) {
 
   // Run opencode in the background so we can capture its PID and wait for it
   const cmd = `cd "${projectPath}" && OLLAMA_HOST="${OLLAMA_HOST}" nohup ollama launch opencode --model "${LARGE_MODEL}" -- --agent="build" --prompt="${prompt}. IMPORTANT: Make sure the project is 100% complete and includes all features, a .gitignore, and a README. No placeholder/incomplete functions are allowed. Be sure example .env file is named ".env.example"! Make sure everything is complete and functional, test the code at the end, and if it doesn't work fix it, test it again, and do this over and over until it works. Private project blueprint contents (slugified): ${slugify(whitepaperContent, {replacement: ' ', remove: /[*+~.()'"!:|@\n]/g, strict: true, locale: 'en', trim: true})} ." > "${projectPath}/opencode.log" 2>&1 & echo $!`;
+
+  console.log(`\nRunning in: ${projectPath}`);
+  console.log(`Command: ${cmd}`);
+
+  // Capture the PID of the backgrounded opencode process
+  const pid = runSilent(cmd);
+  console.log(`\n🚀 opencode launched in background (PID: ${pid})`);
+
+  // Wait for the opencode process to finish before proceeding
+  await waitForProcess(pid, 'opencode', 15000, 2400000);
+
+  console.log(`\n✅ opencode completed in: ${projectPath}`);
+}
+
+async function step45DebugOpencode(projectName, concept, projectPath) {
+  console.log('\n' + '='.repeat(60));
+  console.log('🚀 STEP 4.5: Running opencode to debug project');
+  console.log('='.repeat(60));
+
+  // Run opencode in the background so we can capture its PID and wait for it
+  const cmd = `cd "${projectPath}" && OLLAMA_HOST="${OLLAMA_HOST}" nohup ollama launch opencode --model "${MEDIUM_MODEL}" -- --agent="build" --prompt="Please fix all bugs and issues in this project. Do not skip any!" > "${projectPath}/opencode-debug.log" 2>&1 & echo $!`;
 
   console.log(`\nRunning in: ${projectPath}`);
   console.log(`Command: ${cmd}`);
