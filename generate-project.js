@@ -288,9 +288,9 @@ async function step4RunOpencode(projectName, concept, projectPath) {
   console.log(`\n🚀 opencode launched in background (PID: ${pid})`);
 
   // Wait for the opencode process to finish before proceeding
-  await waitForProcess(pid, 'opencode', 15000, 2400000);
+  await waitForProcess(pid, 'opencode', 15000, 1800000);
 
-  console.log(`\n✅ opencode completed in: ${projectPath}`);
+  console.log(`\n✅ opencode code creation completed in: ${projectPath}`);
 }
 
 async function step45DebugOpencode(projectName, projectPath) {
@@ -309,9 +309,9 @@ async function step45DebugOpencode(projectName, projectPath) {
   console.log(`\n🚀 opencode launched in background (PID: ${pid})`);
 
   // Wait for the opencode process to finish before proceeding
-  await waitForProcess(pid, 'opencode', 15000, 2400000);
+  await waitForProcess(pid, 'opencode', 15000, 2100000);
 
-  console.log(`\n✅ opencode completed in: ${projectPath}`);
+  console.log(`\n✅ opencode debug completed in: ${projectPath}`);
 }
 
 // ─── Step 5: Publish to GitHub via git CLI ──────────────────────────────────
