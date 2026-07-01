@@ -147,7 +147,6 @@ function runOpencodeAgent({ prompt, model, projectPath, logFileName }) {
     const child = spawn('ollama', args, {
       cwd: projectPath,
       env: { ...process.env, OLLAMA_HOST },
-      shell: true
     });
 
     child.stdout.pipe(logStream);
