@@ -141,10 +141,10 @@ function runOpencodeAgent({ prompt, model, projectPath, logFileName }) {
       'launch', 'opencode',
       '--model', model,
       '--',
-      'run', '--agent', 'build', '--auto', '--prompt', prompt
+      '--agent', 'build', '--auto', '--prompt', prompt
     ];
 
-    const child = spawn('ollama', args, {
+    const child = spawn(`OLLAMA_HOST=${OLLAMA_HOST} ollama`, args, {
       cwd: projectPath,
       env: { ...process.env, OLLAMA_HOST },
     });
