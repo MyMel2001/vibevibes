@@ -130,7 +130,7 @@ function runSilent(cmd, opts = {}) {
  * Wait for a process (by PID) to finish by polling `ps`.
  * Polls every POLL_INTERVAL ms until the process exits or TIMEOUT ms elapses.
  */
-function waitForProcess(pid, label = 'process', pollInterval = 15000, timeout = 2400000) {
+function waitForProcess(pid, label = 'process', pollInterval = 15000, timeout = 12000000) {
   return new Promise((resolve, reject) => {
     const start = Date.now();
     console.log(`⏳ Waiting for ${label} (PID ${pid}) to complete...`);
@@ -288,7 +288,7 @@ async function step4RunOpencode(projectName, concept, projectPath) {
   console.log(`\n🚀 opencode launched in background (PID: ${pid})`);
 
   // Wait for the opencode process to finish before proceeding
-  await waitForProcess(pid, 'opencode', 15000, 2400000);
+  await waitForProcess(pid, 'opencode', 15000, 12000000);
 
   console.log(`\n✅ opencode completed in: ${projectPath}`);
 }
@@ -309,7 +309,7 @@ async function step45DebugOpencode(projectName, projectPath) {
   console.log(`\n🚀 opencode launched in background (PID: ${pid})`);
 
   // Wait for the opencode process to finish before proceeding
-  await waitForProcess(pid, 'opencode', 15000, 2400000);
+  await waitForProcess(pid, 'opencode', 15000, 12000000);
 
   console.log(`\n✅ opencode completed in: ${projectPath}`);
 }
