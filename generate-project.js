@@ -270,7 +270,6 @@ async function step3CreateProjectFolder(projectName) {
   if (existsSync(projectPath)) {
     console.log(`⚠️  Project folder already exists: ${projectPath}`);
     main()
-    return { "", "" };
   }
   mkdirSync(projectPath, { recursive: true });
   console.log(`✅ Created project folder: ${projectPath}`);
