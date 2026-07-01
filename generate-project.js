@@ -247,7 +247,8 @@ Format this as a proper markdown document with headings, code blocks, and tables
   mkdirSync(docDir, { recursive: true });
   if (existsSync(docPath)) {
     console.log(`⚠️  Whitepaper already exists: ${docPath}`);
-    return docPath;
+    main()
+    return "";
   }
   const response = await generate(MEDIUM_MODEL, prompt);
   writeFileSync(docPath, `# ${projectName} — Implementation Blueprint\n\n## Concept\n\n${concept}\n\n---\n\n${response}`, 'utf-8');
@@ -268,7 +269,8 @@ async function step3CreateProjectFolder(projectName) {
 
   if (existsSync(projectPath)) {
     console.log(`⚠️  Project folder already exists: ${projectPath}`);
-    return { folderName, projectPath };
+    main()
+    return { "", "" };
   }
   mkdirSync(projectPath, { recursive: true });
   console.log(`✅ Created project folder: ${projectPath}`);
