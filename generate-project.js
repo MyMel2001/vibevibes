@@ -137,6 +137,7 @@ function runOpencodeAgent({ prompt, model, projectPath, logFileName }) {
     
     console.log(`\n⏳ Launching opencode agent... (Logs tracking at: ${logPath})`);
 
+    // Clean arguments array without shell evaluation requirements
     const args = [
       'launch', 'opencode',
       '--model', model,
@@ -144,9 +145,13 @@ function runOpencodeAgent({ prompt, model, projectPath, logFileName }) {
       '--agent', 'build', '--auto', '--prompt', prompt
     ];
 
-    const child = spawn(`OLLAMA_HOST=${OLLAMA_HOST} ollama`, args, {
+    // shell: false (default). OLLAMA_HOST is passed explicitly in the env option object.
+    const child = spawn('ollama', args, {
       cwd: projectPath,
-      env: { ...process.env, OLLAMA_HOST },
+      env: { 
+        ...process.env, 
+        OLLAMA_HOST: OLLAMA_HOST 
+      }
     });
 
     child.stdout.pipe(logStream);
