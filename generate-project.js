@@ -117,6 +117,18 @@ function slugify(name) {
     .replace(/^-|-$/g, '');
 }
 
+/**
+ * Sanitize a string for safe inclusion in a shell command argument.
+ * Replaces single quotes, newlines, and other shell-dangerous characters.
+ */
+function sanitizeForShell(str) {
+  return str
+    .replace(/'/g, "'\\''")
+    .replace(/\n/g, ' ')
+    .replace(/\r/g, '')
+    .trim();
+}
+
 function run(cmd, opts = {}) {
   console.log(`\n$ ${cmd}`);
   return execSync(cmd, { encoding: 'utf-8', stdio: 'inherit', ...opts });
@@ -130,7 +142,7 @@ function runSilent(cmd, opts = {}) {
  * Wait for a process (by PID) to finish by polling `ps`.
  * Polls every POLL_INTERVAL ms until the process exits or TIMEOUT ms elapses.
  */
-function waitForProcess(pid, label = 'process', pollInterval = 15000, timeout = 7200000) {
+function waitForProcess(pid, label = 'process', pollInterval = 5000, timeout = 7200000) {
   return new Promise((resolve, reject) => {
     const start = Date.now();
     console.log(`⏳ Waiting for ${label} (PID ${pid}) to complete...`);
@@ -235,15 +247,13 @@ Format this as a proper markdown document with headings, code blocks, and tables
   mkdirSync(docDir, { recursive: true });
   if (existsSync(docPath)) {
     console.log(`⚠️  Whitepaper already exists: ${docPath}`);
-    main()
-    return ''
-  } else {
-    const response = await generate(MEDIUM_MODEL, prompt);
-    writeFileSync(docPath, `# ${projectName} — Implementation Blueprint\n\n## Concept\n\n${concept}\n\n---\n\n${response}`, 'utf-8');
-    console.log(`\n✅ Whitepaper saved to: ${docPath}`);
-    whitepaperContent = response
     return docPath;
   }
+  const response = await generate(MEDIUM_MODEL, prompt);
+  writeFileSync(docPath, `# ${projectName} — Implementation Blueprint\n\n## Concept\n\n${concept}\n\n---\n\n${response}`, 'utf-8');
+  console.log(`\n✅ Whitepaper saved to: ${docPath}`);
+  whitepaperContent = response
+  return docPath;
 }
 
 // ─── Step 3: Create project folder ──────────────────────────────────────────
@@ -258,12 +268,10 @@ async function step3CreateProjectFolder(projectName) {
 
   if (existsSync(projectPath)) {
     console.log(`⚠️  Project folder already exists: ${projectPath}`);
-    main()
-    return {}
-  } else {
-    mkdirSync(projectPath, { recursive: true });
-    console.log(`✅ Created project folder: ${projectPath}`);
+    return { folderName, projectPath };
   }
+  mkdirSync(projectPath, { recursive: true });
+  console.log(`✅ Created project folder: ${projectPath}`);
 
   return { folderName, projectPath };
 }
@@ -275,10 +283,15 @@ async function step4RunOpencode(projectName, concept, projectPath) {
   console.log('🚀 STEP 4: Running opencode to scaffold project');
   console.log('='.repeat(60));
 
-  const prompt = `Create project with these specs: ${concept}`;
+  const prompt = `Create project with these specs: ${concept}. IMPORTANT: Make sure the project is 100% complete and includes all features, a .gitignore, and a README. No placeholder/incomplete functions are allowed. Be sure example .env file is named ".env.example"! Make sure everything is complete and functional, test the code at the end, and if it doesn't work fix it, test it again, and do this over and over until it works. Make sure the code is 100% feature complete, completing all project phases (ignore any timelines, etc. I just want this done.)`;
 
-  // Run opencode in the background so we can capture its PID and wait for it
-  const cmd = `cd "${projectPath}" && OLLAMA_HOST="${OLLAMA_HOST}" nohup ollama launch opencode --model "${LARGE_MODEL}" -- --agent="build" --prompt="${prompt}. IMPORTANT: Make sure the project is 100% complete and includes all features, a .gitignore, and a README. No placeholder/incomplete functions are allowed. Be sure example .env file is named ".env.example"! Make sure everything is complete and functional, test the code at the end, and if it doesn't work fix it, test it again, and do this over and over until it works. Make sure the code is 100% feature complete, completing all project phases (ignore any timelines, etc. I just want this done.) Private project blueprint contents (slugified): ${slugify(whitepaperContent, {replacement: ' ', remove: /[*+~.()'"!:|@\n]/g, strict: true, locale: 'en', trim: true})} ." > "${projectPath}/opencode.log" 2>&1 & echo $!`;
+  // Use `ollama launch opencode -- run` (headless, no TTY needed) with the build agent
+  // The `--` separates ollama launch flags from opencode subcommand args
+  const cmd = `cd "${projectPath}" && OLLAMA_HOST="${OLLAMA_HOST}" nohup ollama launch opencode \
+  --model "${LARGE_MODEL}" \
+  -- \
+  run --agent build --auto '${sanitizeForShell(prompt)}' \
+  > "${projectPath}/opencode.log" 2>&1 & echo $!`;
 
   console.log(`\nRunning in: ${projectPath}`);
   console.log(`Command: ${cmd}`);
@@ -298,8 +311,13 @@ async function step45DebugOpencode(projectName, projectPath) {
   console.log('🚀 STEP 4.5: Running opencode to debug project');
   console.log('='.repeat(60));
 
-  // Run opencode in the background so we can capture its PID and wait for it
-  const cmd = `cd "${projectPath}" && OLLAMA_HOST="${OLLAMA_HOST}" nohup ollama launch opencode --model "${MEDIUM_MODEL}" -- --agent="build" --prompt="Please fix all bugs and issues in this project. Do not skip any!" > "${projectPath}/opencode-debug.log" 2>&1 & echo $!`;
+  // Use `ollama launch opencode -- run` (headless, no TTY needed) with the build agent
+  // The `--` separates ollama launch flags from opencode subcommand args
+  const cmd = `cd "${projectPath}" && OLLAMA_HOST="${OLLAMA_HOST}" nohup ollama launch opencode \
+  --model "${MEDIUM_MODEL}" \
+  -- \
+  run --agent build --auto 'Please fix all bugs and issues in this project. Do not skip any!' \
+  > "${projectPath}/opencode-debug.log" 2>&1 & echo $!`;
 
   console.log(`\nRunning in: ${projectPath}`);
   console.log(`Command: ${cmd}`);
@@ -504,15 +522,14 @@ async function main() {
     await step4RunOpencode(projectName, concept, projectPath);
     await step45DebugOpencode(projectName, projectPath)
     await step5PublishToGitHub(projectName, projectPath);
-
-    console.log('\n' + '✅'.repeat(30));
-    console.log(`\n🎉 ALL DONE!`);
-    console.log(`   📄 Whitepaper: ${whitepaperPath}`);
-    console.log(`   📁 Project:    ${projectPath}`);
-    console.log(`   🐙 Repo name:  ${folderName}`);
-    console.log('\n');
-    console.log("📁 Moving on to next project...")
   }
+
+  console.log('\n' + '✅'.repeat(30));
+  console.log(`\n🎉 ALL DONE!`);
+  console.log(`   📄 Whitepaper: ${whitepaperPath}`);
+  console.log(`   📁 Project:    ${projectPath}`);
+  console.log(`   🐙 Repo name:  ${folderName}`);
+  console.log('\n');
 }
 
 main().catch((err) => {
