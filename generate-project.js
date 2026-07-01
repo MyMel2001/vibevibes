@@ -291,7 +291,7 @@ async function step4RunOpencode(projectName, concept, projectPath) {
   const cmd = `cd "${projectPath}" && OLLAMA_HOST="${OLLAMA_HOST}" nohup ollama launch opencode \
   --model "${LARGE_MODEL}" \
   -- \
-  run --agent build --auto '${sanitizeForShell(prompt)}' \
+  run --agent build --auto --prompt '${sanitizeForShell(prompt)}' \
   > "${projectPath}/opencode.log" 2>&1 & echo $!`;
 
   console.log(`\nRunning in: ${projectPath}`);
@@ -317,7 +317,7 @@ async function step45DebugOpencode(projectName, projectPath) {
   const cmd = `cd "${projectPath}" && OLLAMA_HOST="${OLLAMA_HOST}" nohup ollama launch opencode \
   --model "${MEDIUM_MODEL}" \
   -- \
-  run --agent build --auto 'Please fix all bugs and issues in this project. Do not skip any!' \
+  run --agent build --auto --prompt 'Please fix all bugs and issues in this project. Do not skip any!' \
   > "${projectPath}/opencode-debug.log" 2>&1 & echo $!`;
 
   console.log(`\nRunning in: ${projectPath}`);
