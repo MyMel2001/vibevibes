@@ -293,7 +293,7 @@ async function step4RunOpencode(projectName, concept, projectPath) {
   console.log(`\n✅ opencode completed in: ${projectPath}`);
 }
 
-async function step45DebugOpencode(projectName, concept, projectPath) {
+async function step45DebugOpencode(projectName, projectPath) {
   console.log('\n' + '='.repeat(60));
   console.log('🚀 STEP 4.5: Running opencode to debug project');
   console.log('='.repeat(60));
@@ -510,6 +510,7 @@ async function main() {
       continue; 
     }
     await step4RunOpencode(projectName, concept, projectPath);
+    await step45DebugOpencode(projectName, projectPath)
     await step5PublishToGitHub(projectName, projectPath);
 
     console.log('\n' + '✅'.repeat(30));
