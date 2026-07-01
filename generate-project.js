@@ -127,8 +127,8 @@ function runSilent(cmd, opts = {}) {
 }
 
 /**
- * Handles executing an opencode agent execution reliably using native spawn.
- * Streams stdout/stderr directly to the designated log file.
+ * Executes the opencode agent reliably using native spawn without relying on the system shell.
+ * Passes the arguments cleanly to match working standalone command configurations.
  */
 function runOpencodeAgent({ prompt, model, projectPath, logFileName }) {
   return new Promise((resolve, reject) => {
@@ -137,23 +137,27 @@ function runOpencodeAgent({ prompt, model, projectPath, logFileName }) {
     
     console.log(`\n⏳ Launching opencode agent... (Logs tracking at: ${logPath})`);
 
-    // Clean arguments array without shell evaluation requirements
+    // Clean arguments matching: ollama launch opencode --model <model> -- --agent build --auto --prompt <prompt>
     const args = [
       'launch', 'opencode',
       '--model', model,
       '--',
-      '--agent', 'build', '--auto', '--prompt', prompt
+      '--agent', 'build',
+      '--auto',
+      '--prompt', prompt
     ];
 
-    // shell: false (default). OLLAMA_HOST is passed explicitly in the env option object.
+    // shell: false ensures arguments are parsed cleanly as separate entity tokens.
     const child = spawn('ollama', args, {
       cwd: projectPath,
       env: { 
         ...process.env, 
         OLLAMA_HOST: OLLAMA_HOST 
-      }
+      },
+      shell: false
     });
 
+    // Pipe stdout and stderr streams cleanly directly into the log file.
     child.stdout.pipe(logStream);
     child.stderr.pipe(logStream);
 
@@ -165,7 +169,7 @@ function runOpencodeAgent({ prompt, model, projectPath, logFileName }) {
 
     child.on('close', (code) => {
       clearInterval(interval);
-      console.log('');
+      console.log(''); // New line to break tracking indicator cleanly
       if (code === 0) {
         resolve();
       } else {
@@ -227,7 +231,7 @@ async function step2GenerateWhitepaper(projectName, concept) {
   
   if (existsSync(docPath)) {
     console.log(`⚠️  Whitepaper already exists: ${docPath}`);
-    return null; // Return null instead of recursing main()
+    return null; // Return null so the main loop can safely skip and repeat execution
   }
 
   const prompt = `You are a senior software architect writing a detailed implementation blueprint/whitepaper.
@@ -268,7 +272,7 @@ async function step3CreateProjectFolder(projectName) {
 
   if (existsSync(projectPath)) {
     console.log(`⚠️  Project folder already exists: ${projectPath}`);
-    return null; // Return null instead of recursing main()
+    return null; // Return null so the main loop can safely skip and repeat execution
   }
   
   mkdirSync(projectPath, { recursive: true });
@@ -467,13 +471,13 @@ async function main() {
     const whitepaperPath = await step2GenerateWhitepaper(projectName, concept);
     if (whitepaperPath === null) {
       console.log('🔄 Restarting loop to generate a fresh concept...');
-      continue; // Cleanly loops back to step 1
+      continue; 
     }
     
     const projectFolderData = await step3CreateProjectFolder(projectName);
     if (projectFolderData === null) {
       console.log('🔄 Restarting loop to generate a fresh concept...');
-      continue; // Cleanly loops back to step 1
+      continue; 
     }
     
     const { projectPath } = projectFolderData;
