@@ -43,7 +43,10 @@ const CODER_CONFIG = {
 
 // Instantiates client dynamically depending on task
 function getClient(config) {
-  return new OpenAI({ baseURL: config.baseURL, apiKey: config.apiKey });
+  return new OpenAI({ baseURL: config.baseURL,
+                     apiKey: config.apiKey,
+                    // Set max timeout to 12 hours (120 min * 60 sec * 1000 ms) you moron.
+                     timeout: 12 * 60 * 60 * 1000,});
 }
 
 async function ideateProject() {
