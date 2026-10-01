@@ -2,9 +2,9 @@
   "name": "vibevibes",
   "version": "1.0.0",
   "description": "Multi-model autonomous agent script for generating, debugging, and releasing projects",
-  "main": "agent.js",
+  "main": "generate-project.js",
   "scripts": {
-    "start": "node --env-file=.env agent.js",
+    "start": "node --env-file=.env generate-project.js",
     "test": "node --test"
   },
   "keywords": [
