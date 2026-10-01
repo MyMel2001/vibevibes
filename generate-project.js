@@ -10,9 +10,12 @@ function parseLLMJson(rawText) {
   }
 
   // 1. Strip markdown fences
-  let cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
+  let cleaned = rawText
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
+    .trim();
 
-  // 2. Extract strictly from the first '{' to the last '}'
+  // 2. Extract from the first '{' to the last '}'
   const firstBrace = cleaned.indexOf("{");
   const lastBrace = cleaned.lastIndexOf("}");
 
@@ -21,9 +24,10 @@ function parseLLMJson(rawText) {
   }
 
   try {
-    return parseLLMJson(cleaned);
+    return JSON.parse(cleaned);
   } catch (err) {
     console.error("❌ RAW LLM OUTPUT THAT FAILED TO PARSE:\n", rawText);
+    console.error("❌ CLEANED OUTPUT:\n", cleaned);
     throw err;
   }
 }
@@ -89,17 +93,40 @@ function runCommand(command, cwd = process.cwd()) {
 
 async function askLLM(config, prompt, systemInstruction = "", jsonMode = false) {
   const client = getClient(config);
+
   const messages = [];
-  if (systemInstruction) messages.push({ role: "system", content: systemInstruction });
-  messages.push({ role: "user", content: prompt });
+
+  if (systemInstruction) {
+    messages.push({
+      role: "system",
+      content: systemInstruction,
+    });
+  }
+
+  messages.push({
+    role: "user",
+    content: prompt,
+  });
 
   const response = await client.chat.completions.create({
     model: config.model,
     messages,
-    ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
+    ...(jsonMode
+      ? { response_format: { type: "json_object" } }
+      : {}),
   });
 
-  return response.choices[0].message.content;
+  console.log("DEBUG LLM RESPONSE:", JSON.stringify(response, null, 2));
+
+  const content = response?.choices?.[0]?.message?.content;
+
+  if (!content) {
+    throw new Error(
+      `LLM returned no message content.\nFull response:\n${JSON.stringify(response, null, 2)}`
+    );
+  }
+
+  return content;
 }
 
 async function runMultiModelLoop(userGoal) {
@@ -211,7 +238,7 @@ Fix all issues and return updated JSON under key "files".`;
 
 
 async function main() {
-  goal = await ideateProject();
+  const goal = await ideateProject();
 
   await runMultiModelLoop(goal);
 }
