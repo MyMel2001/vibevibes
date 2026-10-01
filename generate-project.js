@@ -1,3 +1,4 @@
+
 #!/usr/bin/env node
 
 /**
@@ -5,10 +6,10 @@
  *
  * Uses the Ollama official npm library + OpenCode + git CLI to:
  * 1. Generate a project name & concept (small model)
- * 2. Generate a detailed implementation whitepaper (medium model)
- * 3. Save the whitepaper to ~/Documents
- * 4. Create the project folder in ~/Code/<project-name>
- * 5. Run OpenCode to scaffold the project
+ * 2. Create the project folder in ~/Code/<project-name>
+ * 3. Have OpenCode write a detailed implementation whitepaper/spec
+ * 4. Save the same whitepaper to ~/Documents
+ * 5. Run OpenCode again to scaffold the project from that spec
  * 6. Run OpenCode again to debug/fix the project
  * 7. Publish to GitHub via the GitHub API + git CLI
  */
@@ -461,15 +462,16 @@ CONCEPT: <one-paragraph description>`;
   return { projectName, concept, folderName };
 }
 
-// ─── Step 2: Generate whitepaper ────────────────────────────────────────────
+// ─── Step 3: Have OpenCode write the implementation whitepaper ───────────────
 
-async function step2GenerateWhitepaper(projectName, concept, folderName) {
+async function step3GenerateWhitepaper(projectName, concept, folderName, projectPath) {
   console.log('\n' + '='.repeat(60));
-  console.log('📄 STEP 2: Generating implementation whitepaper');
+  console.log('📄 STEP 3: Having OpenCode write the implementation whitepaper');
   console.log('='.repeat(60));
 
   const docDir = join(homedir(), 'Documents');
   const docPath = join(docDir, `${folderName}-whitepaper.md`);
+  const blueprintPath = join(projectPath, '.project-blueprint.md');
 
   mkdirSync(docDir, { recursive: true });
 
@@ -477,52 +479,80 @@ async function step2GenerateWhitepaper(projectName, concept, folderName) {
     throw new OutputCollisionError(`Whitepaper already exists: ${docPath}`);
   }
 
-  const prompt = `You are a senior software architect writing a detailed implementation blueprint/whitepaper.
+  const prompt = `You are a senior software architect and technical writer.
+
+Your task is to write a complete implementation specification for a brand-new project.
+Do NOT implement the application yet. Do NOT create source code, package files, tests, configs, or other project files.
+Your only file-writing task is to create this exact file:
+
+.project-blueprint.md
 
 Project Name: ${projectName}
 Concept: ${concept}
 
-Write a comprehensive, professional implementation whitepaper covering:
+The document must be a comprehensive, concrete implementation blueprint for another coding agent to follow.
+Cover all of the following:
 
-1. **Executive Summary** — high-level vision and goals
-2. **System Architecture** — tech stack recommendations, architecture diagram description (ASCII), component breakdown
-3. **Core Features** — detailed feature list with priority (P0/P1/P2)
-4. **Data Model** — key entities, relationships, database schema outline
-5. **API Design** — RESTful or GraphQL endpoints, request/response shapes
-6. **Frontend Architecture** — component tree, state management, routing
-7. **Implementation Phases** — phased rollout plan (Phase 1: MVP, Phase 2: v1, Phase 3: v2)
-8. **Testing Strategy** — unit, integration, e2e
-9. **Deployment & DevOps** — CI/CD, hosting, monitoring
-10. **Future Roadmap** — post-v2 ideas
+1. Executive Summary — vision, goals, intended users, and scope
+2. Requirements — functional and non-functional requirements
+3. System Architecture — recommended stack, major components, boundaries, data flow, and an ASCII architecture diagram
+4. Core Features — detailed features with P0/P1/P2 priorities and acceptance criteria
+5. Data Model — entities, relationships, important fields, constraints, and schema outline
+6. API Design — endpoints or operations, request/response shapes, validation, authentication/authorization where applicable
+7. Frontend Architecture — pages, component tree, state management, routing, and UX behavior where applicable
+8. Backend Architecture — services, modules, background jobs, integrations, and error handling where applicable
+9. Security & Privacy — relevant threats, secrets handling, input validation, and safe defaults
+10. Implementation Plan — Phase 1 MVP, Phase 2 v1, Phase 3 v2, with concrete deliverables
+11. Testing Strategy — unit, integration, end-to-end, and manual verification requirements
+12. Deployment & DevOps — local development, build, deployment, CI/CD, monitoring, and backups where applicable
+13. Project Structure — recommended directory/file tree
+14. Definition of Done — explicit conditions that must be true before the implementation is considered complete
+15. Future Roadmap — sensible post-v2 ideas
 
-Format this as a proper markdown document with headings, code blocks, and tables where appropriate. Be thorough and specific — this is a real implementation blueprint.`;
+Requirements for the document:
+- Use valid Markdown with clear headings.
+- Be specific enough that a coding agent can implement the project without guessing about the intended design.
+- Prefer concrete decisions and explain important tradeoffs briefly.
+- Include tables and code blocks where they improve clarity.
+- Do not use placeholder text such as 'TBD' unless the concept genuinely requires a decision to be made later.
+- Do not implement anything.
+- Do not create any file other than .project-blueprint.md.
+- Finish only after .project-blueprint.md has been written and is complete.`;
 
-  const response = await generate(MEDIUM_MODEL, prompt);
+  await runOpenCode({
+    model: MEDIUM_MODEL,
+    prompt,
+    projectPath,
+    logPath: join(projectPath, 'opencode-whitepaper.log'),
+    label: 'opencode whitepaper',
+  });
 
-  const fullWhitepaper = [
-    `# ${projectName} — Implementation Blueprint`,
-    '',
-    '## Concept',
-    '',
-    concept,
-    '',
-    '---',
-    '',
-    response,
-    '',
-  ].join('\n');
+  if (!existsSync(blueprintPath)) {
+    throw new Error(
+      `OpenCode completed successfully but did not create ${blueprintPath}.`
+    );
+  }
 
-  writeFileSync(docPath, fullWhitepaper, 'utf-8');
+  const whitepaperContent = readFileSync(blueprintPath, 'utf-8').trim();
+
+  if (!whitepaperContent) {
+    throw new Error(`OpenCode created an empty whitepaper: ${blueprintPath}`);
+  }
+
+  // Save the same document to ~/Documents for the existing workflow.
+  writeFileSync(docPath, whitepaperContent + '\n', 'utf-8');
 
   console.log(`\n✅ Whitepaper saved to: ${docPath}`);
+  console.log(`✅ OpenCode specification retained in project: ${blueprintPath}`);
 
   return {
     docPath,
-    whitepaperContent: response,
+    whitepaperContent,
+    blueprintPath,
   };
 }
 
-// ─── Step 3: Create project folder ──────────────────────────────────────────
+// ─── Step 2: Create project folder ──────────────────────────────────────────
 
 function getProjectPath(folderName) {
   return join(homedir(), 'Code', folderName);
@@ -541,9 +571,9 @@ function assertOutputSlotsAvailable(folderName) {
   }
 }
 
-function step3CreateProjectFolder(folderName) {
+function step2CreateProjectFolder(folderName) {
   console.log('\n' + '='.repeat(60));
-  console.log('📁 STEP 3: Creating project folder');
+  console.log('📁 STEP 2: Creating project folder');
   console.log('='.repeat(60));
 
   const projectPath = getProjectPath(folderName);
@@ -560,32 +590,18 @@ function step3CreateProjectFolder(folderName) {
 
 // ─── Step 4: Run OpenCode to scaffold project ────────────────────────────────
 
-async function step4RunOpencode(projectName, concept, whitepaperContent, projectPath) {
+async function step4RunOpencode(projectName, concept, blueprintPath, projectPath) {
   console.log('\n' + '='.repeat(60));
-  console.log('🚀 STEP 4: Running OpenCode to scaffold project');
+  console.log('🚀 STEP 4: Running OpenCode to scaffold project from the specification');
   console.log('='.repeat(60));
 
-  // Put the blueprint inside the project temporarily so OpenCode can read it
-  // without hitting shell quoting or OS command-line-length limits.
-  const blueprintPath = join(projectPath, '.project-blueprint.md');
   const gitignorePath = join(projectPath, '.gitignore');
 
-  const blueprint = [
-    `# ${projectName} — Private Implementation Blueprint`,
-    '',
-    `## Concept`,
-    '',
-    concept,
-    '',
-    '---',
-    '',
-    whitepaperContent,
-    '',
-  ].join('\n');
+  if (!existsSync(blueprintPath)) {
+    throw new Error(`Implementation blueprint not found: ${blueprintPath}`);
+  }
 
-  writeFileSync(blueprintPath, blueprint, 'utf-8');
-
-  // Ensure the temporary blueprint and generated logs are never published.
+  // Ensure the private blueprint and generated logs are never published.
   writeFileSync(
     gitignorePath,
     [
@@ -593,6 +609,7 @@ async function step4RunOpencode(projectName, concept, whitepaperContent, project
       '.project-blueprint.md',
       'opencode.log',
       'opencode-debug.log',
+      'opencode-whitepaper.log',
       '',
     ].join('\n'),
     'utf-8'
@@ -981,24 +998,25 @@ async function main() {
       } = await step1GenerateConcept();
 
       // Check both destinations before spending more inference time or
-      // creating an orphaned whitepaper.
+      // creating an orphaned project.
       assertOutputSlotsAvailable(folderName);
+
+      const projectPath = step2CreateProjectFolder(folderName);
 
       const {
         docPath,
-        whitepaperContent,
-      } = await step2GenerateWhitepaper(
+        blueprintPath,
+      } = await step3GenerateWhitepaper(
         projectName,
         concept,
-        folderName
+        folderName,
+        projectPath
       );
-
-      const projectPath = step3CreateProjectFolder(folderName);
 
       await step4RunOpencode(
         projectName,
         concept,
-        whitepaperContent,
+        blueprintPath,
         projectPath
       );
 
@@ -1007,6 +1025,7 @@ async function main() {
       // The blueprint is only an agent working file; the canonical copy is
       // already saved under ~/Documents.
       removeFileIfExists(join(projectPath, '.project-blueprint.md'));
+      removeFileIfExists(join(projectPath, 'opencode-whitepaper.log'));
 
       const repoUrl = await step5PublishToGitHub(
         projectName,
@@ -1036,3 +1055,4 @@ main().catch((err) => {
   console.error('\n❌ Fatal error:', err?.stack || err?.message || err);
   process.exit(1);
 });
+
