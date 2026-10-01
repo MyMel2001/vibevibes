@@ -1,23 +1,16 @@
 {
   "name": "vibevibes",
   "version": "1.0.0",
-  "description": "Multi-model autonomous agent script for generating, debugging, and releasing projects",
+  "description": "",
   "main": "generate-project.js",
   "scripts": {
-    "start": "node --env-file=.env generate-project.js",
-    "test": "node --test"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "type": "module",
-  "keywords": [
-    "ai",
-    "agent",
-    "automation",
-    "openai"
-  ],
+  "keywords": [],
   "author": "",
   "license": "ISC",
+  "type": "module",
   "dependencies": {
-    "dotenv": "^16.4.5",
-    "openai": "^4.86.0"
+    "ollama": "^0.6.3"
   }
 }
