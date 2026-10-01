@@ -22,6 +22,32 @@ function getClient(config) {
   return new OpenAI({ baseURL: config.baseURL, apiKey: config.apiKey });
 }
 
+async function ideateProject() {
+  console.log(`\n💡 [0/5] Auto-generating project ideas with SMALL Model...`);
+
+  const ideationPrompt = `Generate a creative, highly useful, self-contained Node.js CLI or utility tool idea.
+Requirements:
+1. Must be buildable within a single Node.js workspace.
+2. Must have clear input/output and be easily testable using native node:test or Jest.
+3. Should solve a real developer, file-management, or productivity problem (e.g., log parsing, format converters, API mock servers, file bundlers).
+
+Respond strictly in JSON format matching this schema:
+{
+  "title": "Short Project Title",
+  "summary": "1-sentence description of the tool",
+  "goalPrompt": "Detailed prompt describing the core logic, CLI interface, and expected test cases."
+}`;
+
+  // Use the fast/small PLANNER_CONFIG model to brainstorm
+  const rawIdeaJson = await askLLM(PLANNER_CONFIG, ideationPrompt, "You are a Product Manager specializing in developer tools.", true);
+  const idea = JSON.parse(rawIdeaJson);
+
+  console.log(`✨ Selected Idea: "${idea.title}"`);
+  console.log(`📝 Description: ${idea.summary}`);
+
+  return idea.goalPrompt;
+}
+
 function runCommand(command, cwd = process.cwd()) {
   try {
     const stdout = execSync(command, { cwd, encoding: "utf8", stdio: "pipe" });
@@ -133,4 +159,11 @@ Fix all issues and return updated JSON under key "files".`;
   console.log(`🎉 Success! Repo live at GitHub.`);
 }
 
-runMultiModelLoop(process.argv[2] || "A CLI utility that formats JSON objects into Markdown tables");
+
+async function main() {
+  goal = await ideateProject();
+
+  await runMultiModelLoop(goal);
+}
+
+main().catch(console.error);
