@@ -93,7 +93,7 @@ const PROMPT_PREFIX = getEnv('PROMPT_PREFIX', 'A modern web application that');
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const REQUEST_TIMEOUT = 900000; // 15 minutes
+const REQUEST_TIMEOUT = Math.max(60000, Number.parseInt(getEnv('REQUEST_TIMEOUT_MS', '1800000'), 10) || 1800000); // 30 minutes by default
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 10000; // 10 seconds
 const OPENCODE_TIMEOUT = 12000000; // 200 minutes
@@ -120,23 +120,48 @@ async function generateWithRetry(model, prompt, retries = MAX_RETRIES) {
   let lastError = null;
 
   for (let attempt = 1; attempt <= retries; attempt++) {
-    let timeoutId;
+    let timeoutId = null;
+    let timedOut = false;
 
     try {
-      const controller = new AbortController();
-
-      timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
-
-      const response = await ollama.generate({
+      // Use Ollama streaming for long generations. Non-streaming requests can
+      // spend several minutes waiting for the first response headers when a
+      // large/slow model is loaded, which can surface as the vague
+      // `TypeError: fetch failed`. Streaming starts the HTTP response early
+      // and lets us receive tokens as they are generated.
+      const stream = await ollama.generate({
         model,
         prompt,
+        stream: true,
         options: { temperature: 0.7 },
-        signal: controller.signal,
       });
 
-      const text = typeof response?.response === 'string'
-        ? response.response.trim()
-        : '';
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        try {
+          ollama.abort();
+        } catch {
+          // Ignore abort cleanup errors; the iterator will report the failure.
+        }
+      }, REQUEST_TIMEOUT);
+
+      let output = '';
+
+      for await (const chunk of stream) {
+        if (typeof chunk?.response === 'string') {
+          output += chunk.response;
+        }
+      }
+
+      const text = output.trim();
+
+      if (timedOut) {
+        const error = new Error(
+          `Request timed out after ${REQUEST_TIMEOUT / 1000}s for model "${model}".`
+        );
+        error.name = 'AbortError';
+        throw error;
+      }
 
       if (!text) {
         throw new Error(`Model "${model}" returned an empty response.`);
@@ -148,8 +173,15 @@ async function generateWithRetry(model, prompt, retries = MAX_RETRIES) {
 
       const isLastAttempt = attempt === retries;
       const isTimeout =
+        timedOut ||
         err?.name === 'AbortError' ||
-        err?.code === 'UND_ERR_HEADERS_TIMEOUT';
+        err?.code === 'UND_ERR_HEADERS_TIMEOUT' ||
+        err?.cause?.code === 'UND_ERR_HEADERS_TIMEOUT';
+
+      const cause = err?.cause;
+      const causeText = cause
+        ? ` | cause: ${cause.code || cause.name || 'unknown'}${cause.message ? ` — ${cause.message}` : ''}`
+        : '';
 
       if (isTimeout) {
         console.warn(
@@ -158,7 +190,7 @@ async function generateWithRetry(model, prompt, retries = MAX_RETRIES) {
         );
       } else {
         console.warn(
-          `⚠️ Request failed: ${err?.message || String(err)} ` +
+          `⚠️ Request failed: ${err?.message || String(err)}${causeText} ` +
           `(attempt ${attempt}/${retries})`
         );
       }
