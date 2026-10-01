@@ -152,11 +152,34 @@ Fix all issues and return updated JSON under key "files".`;
 
   // STEP 5: Release
   console.log("\n🌐 [5/5] Publishing repository to GitHub...");
-  const repoName = `auto-gen-${Date.now()}`;
-  runCommand("git init && git add . && git commit -m 'feat: initial release'", projectDir);
-  runCommand(`gh repo create ${repoName} --public --source=. --remote=origin --push`, projectDir);
-  runCommand(`gh release create v1.0.0 --notes "Automated build"`, projectDir);
-  console.log(`🎉 Success! Repo live at GitHub.`);
+  const repoName = `vibe-${Date.now()}`;
+  const targetOrg = process.env.GITHUB_ORG?.trim();
+
+  runCommand("git init", projectDir);
+  runCommand("git add .", projectDir);
+  runCommand(`git commit -m "feat: autonomous release by VibeVibes"`, projectDir);
+
+  // Build gh repo create command dynamically
+  const orgFlag = targetOrg ? `--org ${targetOrg}` : "";
+  const ghRepoCreate = runCommand(
+    `gh repo create ${targetOrg ? `${targetOrg}/` : ""}${repoName} ${orgFlag} --public --source=. --remote=origin --push`,
+    projectDir
+  );
+
+  if (!ghRepoCreate.success) {
+    console.error("Failed to create GitHub repository:\n", ghRepoCreate.output);
+    return;
+  }
+
+  const releaseRun = runCommand(
+    `gh release create v1.0.0 --notes "Automated build and release by VibeVibes."`,
+    projectDir
+  );
+
+  if (releaseRun.success) {
+    const owner = targetOrg || runCommand("gh api user -q .login", projectDir).output.trim();
+    console.log(`🎉 Success! Repo live at: https://github.com/${owner}/${repoName}`);
+  }
 }
 
 
