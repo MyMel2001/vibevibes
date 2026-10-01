@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "Multi-model autonomous agent script for generating, debugging, and releasing projects",
   "main": "agent.js",
-  "type": "module",
   "scripts": {
     "start": "node --env-file=.env agent.js",
     "test": "node --test"
