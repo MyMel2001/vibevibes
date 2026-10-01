@@ -13,7 +13,7 @@ The script runs in an infinite loop, each iteration executing 5 steps:
 │  🔁  while (true)                                   │
 │                                                     │
 │  1. 🧠  Generate project name & concept  (small LLM) │
-│  2. 📄  Write implementation whitepaper  (large LLM) │
+│  2. 📄  Write implementation whitepaper  (small LLM) │
 │  3. 📁  Create ~/Code/<project-name>/ folder         │
 │  4. 🚀  Scaffold project with opencode   (large LLM) │
 │  5. 🐙  Publish to GitHub via git CLI                │
