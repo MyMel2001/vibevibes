@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
-require('dotenv').config()
+import 'dotenv/config';
 
 // 1. Define separate configurations for Planner vs Coder
 const PLANNER_CONFIG = {
