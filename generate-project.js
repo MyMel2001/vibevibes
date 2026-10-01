@@ -4,6 +4,30 @@ import fs from "fs";
 import path from "path";
 import 'dotenv/config';
 
+function parseLLMJson(rawText) {
+  if (!rawText) {
+    throw new Error("Received empty or null response from LLM.");
+  }
+
+  // 1. Strip markdown fences
+  let cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
+
+  // 2. Extract strictly from the first '{' to the last '}'
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+
+  if (firstBrace !== -1 && lastBrace !== -1) {
+    cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+  }
+
+  try {
+    return parseLLMJson(cleaned);
+  } catch (err) {
+    console.error("❌ RAW LLM OUTPUT THAT FAILED TO PARSE:\n", rawText);
+    throw err;
+  }
+}
+
 // 1. Define separate configurations for Planner vs Coder
 const PLANNER_CONFIG = {
   baseURL: process.env.PLANNER_BASE_URL || "http://localhost:11434/v1", // e.g., local Ollama / vLLM
@@ -40,7 +64,7 @@ Respond strictly in JSON format matching this schema:
 
   // Use the fast/small PLANNER_CONFIG model to brainstorm
   const rawIdeaJson = await askLLM(PLANNER_CONFIG, ideationPrompt, "You are a Product Manager specializing in developer tools.", true);
-  const idea = JSON.parse(rawIdeaJson);
+  const idea = parseLLMJson(rawIdeaJson);
 
   console.log(`✨ Selected Idea: "${idea.title}"`);
   console.log(`📝 Description: ${idea.summary}`);
@@ -102,7 +126,7 @@ Respond strictly with a JSON object:
 }`;
 
   const rawFilesJson = await askLLM(CODER_CONFIG, codePrompt, "You are a Senior Software Engineer.", true);
-  const parsed = JSON.parse(rawFilesJson);
+  const parsed = parseLLMJson(rawFilesJson);
   const files = parsed.files || parsed;
 
   for (const file of files) {
@@ -140,7 +164,7 @@ Current Workspace:\n${JSON.stringify(currentFiles, null, 2)}\n
 Fix all issues and return updated JSON under key "files".`;
 
     const rawFixes = await askLLM(CODER_CONFIG, debugPrompt, "You are a debugging expert.", true);
-    const fixedFiles = (JSON.parse(rawFixes)).files;
+    const fixedFiles = (parseLLMJson(rawFixes)).files;
 
     for (const file of fixedFiles) {
       fs.writeFileSync(path.join(projectDir, file.filePath), file.content);
