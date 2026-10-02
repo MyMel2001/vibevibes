@@ -255,7 +255,8 @@ function assertPrerequisites() {
 }
 
 /**
- * Run OpenCode directly in target process dir to prevent blueprints emitting in root app dir.
+ * Run OpenCode directly inside the project directory so generated files
+ * are guaranteed to stay inside `projectPath`.
  */
 function runOpenCode({
   model,
@@ -278,25 +279,22 @@ function runOpenCode({
     let timeoutId;
     let killTimer;
 
+    // OpenCode reads model/provider configuration from environment variables
     const childEnv = {
       ...process.env,
       OLLAMA_HOST,
+      OPENCODE_MODEL: model,
     };
 
+    // Use absolute blueprint path inside prompt to prevent root-level output
     const absoluteBlueprint = join(projectPath, '.project-blueprint.md');
     const enrichedPrompt = prompt.replace(
       /\.project-blueprint\.md/g,
       absoluteBlueprint
     );
 
-    const args = [
-      'run',
-      '--model',
-      model,
-      '--agent',
-      'build',
-      enrichedPrompt,
-    ];
+    // Clean execution args for opencode run
+    const args = ['run', enrichedPrompt];
 
     const child = spawn('opencode', args, {
       cwd: projectPath,
