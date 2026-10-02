@@ -3,30 +3,20 @@
 /**
  * AI Project Generator
  *
- * Uses the Ollama official npm library + OpenCode + git CLI to:
+ * Uses Ollama official npm library + git CLI to:
  * 1. Generate a project name & concept (small model)
- * 2. Create the project folder in ~/Code/<project-name>
- * 3. Have OpenCode write a detailed implementation whitepaper/spec
- * 4. Save the same whitepaper to ~/Documents
- * 5. Run OpenCode again to scaffold the project from that spec
- * 6. Run OpenCode again to debug/fix the project
- * 7. Publish to GitHub via the GitHub API + git CLI
+ * 2. Generate a detailed implementation whitepaper (large model)
+ * 3. Save whitepaper to ~/Documents
+ * 4. Create project folder in ~/Code/<project-name>
+ * 5. Run opencode to scaffold the project
+ * 6. Publish to GitHub via git CLI
  */
 
-import {
-  readFileSync,
-  writeFileSync,
-  mkdirSync,
-  existsSync,
-  createWriteStream,
-  chmodSync,
-  unlinkSync,
-  readdirSync,
-} from 'fs';
-import { homedir, tmpdir } from 'os';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { homedir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { execFileSync, spawn, spawnSync } from 'child_process';
+import { execSync } from 'child_process';
 import { Ollama } from 'ollama';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -36,386 +26,154 @@ const __dirname = dirname(__filename);
 
 function loadEnv(filepath) {
   const env = {};
-
   if (!existsSync(filepath)) {
     console.error(`❌ .env file not found at: ${filepath}`);
     process.exit(1);
   }
-
   const content = readFileSync(filepath, 'utf-8');
-
-  for (const line of content.split(/\r?\n/)) {
-    let trimmed = line.trim();
-
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
-
-    if (trimmed.startsWith('export ')) {
-      trimmed = trimmed.slice(7).trim();
-    }
-
     const eqIdx = trimmed.indexOf('=');
     if (eqIdx === -1) continue;
-
     const key = trimmed.slice(0, eqIdx).trim();
-    if (!key) continue;
-
     let value = trimmed.slice(eqIdx + 1).trim();
-
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
+    if ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1);
     }
-
     env[key] = value;
   }
-
   return env;
 }
 
 const envPath = join(__dirname, '.env');
-const fileEnv = loadEnv(envPath);
+const env = loadEnv(envPath);
 
-const getEnv = (key, fallback = '') => process.env[key] ?? fileEnv[key] ?? fallback;
-
-const OLLAMA_HOST = getEnv('OLLAMA_HOST', 'http://localhost:11434');
-const SMALL_MODEL = getEnv('SMALL_MODEL', 'llama3.2:3b');
-const LARGE_MODEL = getEnv('LARGE_MODEL', 'qwen2.5-coder:14b');
-const MEDIUM_MODEL = getEnv('MEDIUM_MODEL', LARGE_MODEL);
-const GITHUB_ORG = getEnv('GITHUB_ORG');
-const GITHUB_USER = getEnv('GITHUB_USER', GITHUB_ORG);
-const GITHUB_TOKEN = getEnv('GITHUB_TOKEN');
-const PROMPT_PREFIX = getEnv('PROMPT_PREFIX', 'A modern web application that');
-
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-const REQUEST_TIMEOUT = Math.max(60000, Number.parseInt(getEnv('REQUEST_TIMEOUT_MS', '1800000'), 10) || 1800000);
-const MAX_RETRIES = 3;
-const RETRY_DELAY = 10000;
-const OPENCODE_TIMEOUT = 12000000;
-const OPENCODE_TERM_GRACE = 10000;
-
-class OutputCollisionError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = 'OutputCollisionError';
-  }
-}
+const OLLAMA_HOST = env.OLLAMA_HOST || 'http://localhost:11434';
+const SMALL_MODEL = env.SMALL_MODEL || 'llama3.2:3b';
+const LARGE_MODEL = env.LARGE_MODEL || 'qwen2.5-coder:14b';
+const MEDIUM_MODEL = env.MEDIUM_MODEL || env.LARGE_MODEL || 'qwen2.5-coder:14b';
+const GITHUB_ORG = env.GITHUB_ORG || '';
+const GITHUB_USER = env.GITHUB_USER || env.GITHUB_ORG || '';
+const GITHUB_TOKEN = env.GITHUB_TOKEN || '';
+const PROMPT_PREFIX = env.PROMPT_PREFIX || 'A modern web application that';
 
 // ─── Ollama client ──────────────────────────────────────────────────────────
 
 const ollama = new Ollama({ host: OLLAMA_HOST });
 
-async function sleep(ms) {
-  await new Promise(resolve => setTimeout(resolve, ms));
-}
+const REQUEST_TIMEOUT = 900000; // 15 minutes
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 10000; // 10 seconds
 
 async function generateWithRetry(model, prompt, retries = MAX_RETRIES) {
   console.log(`\n🤖 Querying model "${model}"...`);
-
-  let lastError = null;
-
   for (let attempt = 1; attempt <= retries; attempt++) {
-    let timeoutId = null;
-    let timedOut = false;
-
     try {
-      const stream = await ollama.generate({
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
+      const response = await ollama.generate({
         model,
         prompt,
-        stream: true,
         options: { temperature: 0.7 },
+        signal: controller.signal,
       });
 
-      timeoutId = setTimeout(() => {
-        timedOut = true;
-        try {
-          ollama.abort();
-        } catch {}
-      }, REQUEST_TIMEOUT);
-
-      let output = '';
-
-      for await (const chunk of stream) {
-        if (typeof chunk?.response === 'string') {
-          output += chunk.response;
-        }
-      }
-
-      const text = output.trim();
-
-      if (timedOut) {
-        const error = new Error(
-          `Request timed out after ${REQUEST_TIMEOUT / 1000}s for model "${model}".`
-        );
-        error.name = 'AbortError';
-        throw error;
-      }
-
-      if (!text) {
-        throw new Error(`Model "${model}" returned an empty response.`);
-      }
-
-      return text;
+      clearTimeout(timeoutId);
+      return response.response.trim();
     } catch (err) {
-      lastError = err;
-
       const isLastAttempt = attempt === retries;
-      const isTimeout =
-        timedOut ||
-        err?.name === 'AbortError' ||
-        err?.code === 'UND_ERR_HEADERS_TIMEOUT' ||
-        err?.cause?.code === 'UND_ERR_HEADERS_TIMEOUT';
-
-      const cause = err?.cause;
-      const causeText = cause
-        ? ` | cause: ${cause.code || cause.name || 'unknown'}${cause.message ? ` — ${cause.message}` : ''}`
-        : '';
+      const isTimeout = err.name === 'AbortError' || err.code === 'UND_ERR_HEADERS_TIMEOUT';
 
       if (isTimeout) {
-        console.warn(
-          `⏰ Request timed out after ${REQUEST_TIMEOUT / 1000}s ` +
-          `(attempt ${attempt}/${retries})`
-        );
+        console.warn(`⏰ Request timed out after ${REQUEST_TIMEOUT / 1000}s (attempt ${attempt}/${retries})`);
       } else {
-        console.warn(
-          `⚠️ Request failed: ${err?.message || String(err)}${causeText} ` +
-          `(attempt ${attempt}/${retries})`
-        );
+        console.warn(`⚠️ Request failed: ${err.message} (attempt ${attempt}/${retries})`);
       }
 
       if (isLastAttempt) {
         console.error(`❌ All ${retries} attempts failed for model "${model}"`);
-        throw lastError;
+        throw err;
       }
 
       const delay = RETRY_DELAY * attempt;
       console.log(`🔄 Retrying in ${delay / 1000}s...`);
-      await sleep(delay);
-    } finally {
-      if (timeoutId) clearTimeout(timeoutId);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
-
-  throw lastError || new Error(`Generation failed for model "${model}".`);
 }
 
 const generate = generateWithRetry;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function slugify(value) {
-  return String(value ?? '')
+function slugify(name) {
+  return name
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, '-')
     .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
+    .replace(/^-|-$/g, '');
 }
 
-function cleanProjectName(value) {
-  return String(value ?? '')
-    .replace(/^[`"'*#\s]+|[`"'*#\s]+$/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+function run(cmd, opts = {}) {
+  console.log(`\n$ ${cmd}`);
+  return execSync(cmd, { encoding: 'utf-8', stdio: 'inherit', ...opts });
 }
 
-function run(command, args = [], opts = {}) {
-  console.log(`\n$ ${command} ${args.join(' ')}`.trim());
-
-  return execFileSync(command, args, {
-    encoding: 'utf-8',
-    stdio: 'inherit',
-    ...opts,
-  });
-}
-
-function runSilent(command, args = [], opts = {}) {
-  return execFileSync(command, args, {
-    encoding: 'utf-8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    ...opts,
-  }).trim();
-}
-
-function commandExists(command) {
-  const result = spawnSync(command, ['--version'], {
-    stdio: 'ignore',
-  });
-
-  return result.status === 0;
-}
-
-function assertPrerequisites() {
-  for (const command of ['ollama', 'git', 'opencode']) {
-    if (!commandExists(command)) {
-      throw new Error(`Required command "${command}" was not found in PATH.`);
-    }
-  }
+function runSilent(cmd, opts = {}) {
+  return execSync(cmd, { encoding: 'utf-8', ...opts }).trim();
 }
 
 /**
- * Run OpenCode directly inside the project directory so generated files
- * are guaranteed to stay inside `projectPath`.
+ * Wait for a process (by PID) to finish by polling `ps`.
+ * Polls every POLL_INTERVAL ms until the process exits or TIMEOUT ms elapses.
  */
-function normalizeOpenCodeModel(model) {
-  const value = String(model ?? '').trim();
-  if (!value) {
-    throw new Error('OpenCode model is empty. Set MEDIUM_MODEL/LARGE_MODEL in .env.');
-  }
-
-  // OpenCode expects provider/model. Plain Ollama model names are routed
-  // through the Ollama provider.
-  return value.includes('/') ? value : `ollama/${value}`;
-}
-
-function readLogTail(logPath, maxChars = 12000) {
-  try {
-    const content = readFileSync(logPath, 'utf-8');
-    if (!content) return '(OpenCode produced no log output.)';
-    return content.length > maxChars ? `…${content.slice(-maxChars)}` : content;
-  } catch (err) {
-    return `(Could not read OpenCode log: ${err.message})`;
-  }
-}
-
-function runOpenCode({
-  model,
-  prompt,
-  projectPath,
-  logPath,
-  label = 'opencode',
-  timeout = OPENCODE_TIMEOUT,
-  allowFailure = false,
-}) {
+function waitForProcess(pid, label = 'process', pollInterval = 15000, timeout = 12000000) {
   return new Promise((resolve, reject) => {
-    console.log(`\n🚀 Starting ${label} with model "${model}"...`);
-    console.log(`   Working directory: ${projectPath}`);
-    console.log(`   Log file: ${logPath}`);
+    const start = Date.now();
+    console.log(`⏳ Waiting for ${label} (PID ${pid}) to complete...`);
 
-    const log = createWriteStream(logPath, { flags: 'w' });
-
-    let settled = false;
-    let timedOut = false;
-    let timeoutId;
-    let killTimer;
-
-    const openCodeModel = normalizeOpenCodeModel(model);
-
-    // Keep OLLAMA_HOST available to Ollama tooling. OpenCode receives the
-    // model explicitly through its CLI --model option.
-    const childEnv = {
-      ...process.env,
-      OLLAMA_HOST,
-    };
-
-    // Use absolute blueprint path inside prompt to prevent root-level output
-    const absoluteBlueprint = join(projectPath, '.project-blueprint.md');
-    const enrichedPrompt = prompt.replace(
-      /\.project-blueprint\.md/g,
-      absoluteBlueprint
-    );
-
-    // OpenCode's CLI expects --model provider/model. --auto permits the
-    // non-interactive run to perform file/tool operations without prompting.
-    const args = ['run', '--model', openCodeModel, '--auto', enrichedPrompt];
-
-    const child = spawn('opencode', args, {
-      cwd: projectPath,
-      env: childEnv,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    child.stdout.pipe(log, { end: false });
-    child.stderr.pipe(log, { end: false });
-
-    const finish = (callback, value) => {
-      if (settled) return;
-      settled = true;
-
-      clearTimeout(timeoutId);
-      clearTimeout(killTimer);
-
-      child.stdout.unpipe(log);
-      child.stderr.unpipe(log);
-      log.end();
-
-      callback(value);
-    };
-
-    child.once('error', (err) => {
-      finish(reject, err);
-    });
-
-    child.once('close', (code, signal) => {
-      const result = { code, signal, timedOut };
-
-      if (timedOut) {
-        const error = new Error(`${label} timed out after ${timeout / 1000}s.`);
-        error.exitCode = code;
-        error.signal = signal;
-
-        if (allowFailure) {
-          console.warn(`⚠️ ${error.message} Continuing because this pass is recoverable.`);
-          finish(resolve, result);
-        } else {
-          finish(reject, error);
-        }
-        return;
+    const interval = setInterval(() => {
+      try {
+        // Check if process is still running via ps
+        execSync(`ps -p ${pid}`, { encoding: 'utf-8', stdio: 'pipe' });
+        // Process still alive
+        const elapsed = ((Date.now() - start) / 1000).toFixed(0);
+        process.stdout.write(`\r⏳ ${label} still running... (${elapsed}s elapsed)`);
+      } catch {
+        // ps -p <pid> exits non-zero when process is not found → it's done
+        clearInterval(interval);
+        clearTimeout(fallbackTimeout);
+        const elapsed = ((Date.now() - start) / 1000).toFixed(0);
+        console.log(`\n✅ ${label} (PID ${pid}) finished after ${elapsed}s`);
+        resolve();
       }
+    }, pollInterval);
 
-      if (code === 0) {
-        finish(resolve, result);
-        return;
+    const fallbackTimeout = setTimeout(() => {
+      clearInterval(interval);
+      console.log(`\n⚠️  Timed out waiting for ${label} (PID ${pid}) after ${timeout / 1000}s — killing process`);
+      try {
+        process.kill(pid, 'SIGTERM');
+        console.log(`🔪 Killed ${label} (PID ${pid})`);
+      } catch (killErr) {
+        console.warn(`⚠️  Could not kill ${label} (PID ${pid}): ${killErr.message}`);
       }
-
-      const logTail = readLogTail(logPath);
-
-      const error = new Error(
-        `${label} exited with code ${code ?? 'unknown'}` +
-        (signal ? ` (signal ${signal})` : '') +
-        `\\n\\nLast OpenCode output from ${logPath}:\\n${logTail}`
-      );
-      error.exitCode = code;
-      error.signal = signal;
-
-      if (allowFailure) {
-        console.warn(`⚠️ ${error.message} Continuing because this pass is recoverable.`);
-        finish(resolve, result);
-      } else {
-        finish(reject, error);
-      }
-    });
-
-    timeoutId = setTimeout(() => {
-      if (settled) return;
-
-      timedOut = true;
-
-      console.warn(
-        `\n⚠️ ${label} exceeded ${timeout / 1000}s — terminating it...`
-      );
-
-      child.kill('SIGTERM');
-
-      killTimer = setTimeout(() => {
-        if (!settled) {
-          console.warn(`🔪 ${label} did not terminate after SIGTERM; forcing exit.`);
-          child.kill('SIGKILL');
-        }
-      }, OPENCODE_TERM_GRACE);
+      resolve();
     }, timeout);
   });
 }
 
-// ─── Step 1: Generate project name & concept ─────────────────────────────────
+// ─── Step 1: Generate project name & concept ──────────────────────────────────
 
 async function step1GenerateConcept() {
   console.log('\n' + '='.repeat(60));
   console.log('📋 STEP 1: Generating project name & concept');
   console.log('='.repeat(60));
 
-  const prompt = `You are a creative product strategist. Based on the following seed idea, come up with a unique, catchy project name (one or two words, no existing well-known names) and a one-paragraph concept description. Make sure the project name and concept are original and aren't repetitive or redundant.
+  const prompt = `You are a creative product strategist. Based on the following seed idea, come up with a unique, catchy project name (one or two words, no existing well-known names) and a one-paragraph concept description. Make sure the project name and concept are original and aren't repetative or redundant (i.e. don't spam "Node" this or "Flux" that in names - use names relevant yet catchy and unique.).
 
 Seed idea: ${PROMPT_PREFIX}
 
@@ -425,474 +183,347 @@ CONCEPT: <one-paragraph description>`;
 
   const response = await generate(SMALL_MODEL, prompt);
 
-  const nameMatch = response.match(
-    /(?:^|\n)\s*PROJECT_NAME\s*:\s*(.+?)(?:\r?\n|$)/i
-  );
-  const conceptMatch = response.match(
-    /(?:^|\n)\s*CONCEPT\s*:\s*([\s\S]*)/i
-  );
+  const nameMatch = response.match(/PROJECT_NAME:\s*(.+)/i);
+  const conceptMatch = response.match(/CONCEPT:\s*(.+)/is);
 
   if (!nameMatch) {
-    throw new Error(
-      `Could not parse project name from model response:\n\n${response}`
-    );
+    console.error('❌ Could not parse project name from response:', response);
+    process.exit(1);
   }
 
-  const projectName = cleanProjectName(nameMatch[1]);
-  const concept = conceptMatch ? conceptMatch[1].trim() : response.trim();
-
-  if (!projectName || !concept) {
-    throw new Error('The model returned an empty project name or concept.');
-  }
-
-  const folderName = slugify(projectName);
-
-  if (!folderName) {
-    throw new Error(
-      `Project name "${projectName}" produced an invalid folder/repository name.`
-    );
-  }
+  const projectName = nameMatch[1].trim();
+  const concept = conceptMatch ? conceptMatch[1].trim() : response;
 
   console.log(`\n✅ Project Name: ${projectName}`);
   console.log(`📝 Concept: ${concept}`);
 
-  return { projectName, concept, folderName };
+  return { projectName, concept };
 }
 
-// ─── Step 3: Have OpenCode write the implementation whitepaper ───────────────
+// ─── Step 2: Generate whitepaper ────────────────────────────────────────────
 
-async function step3GenerateWhitepaper(projectName, concept, folderName, projectPath) {
+let whitepaperContent = ''
+let docPath = ''
+async function step2GenerateWhitepaper(projectName, concept) {
   console.log('\n' + '='.repeat(60));
-  console.log('📄 STEP 3: Having OpenCode write the implementation whitepaper');
+  console.log('📄 STEP 2: Generating implementation whitepaper');
   console.log('='.repeat(60));
 
-  const docDir = join(homedir(), 'Documents');
-  const docPath = join(docDir, `${folderName}-whitepaper.md`);
-  const blueprintPath = join(projectPath, '.project-blueprint.md');
-
-  mkdirSync(docDir, { recursive: true });
-
-  if (existsSync(docPath)) {
-    throw new OutputCollisionError(`Whitepaper already exists: ${docPath}`);
-  }
-
-  const prompt = `You are a senior software architect and technical writer.
-
-Your task is to write a complete implementation specification for a brand-new project.
-Do NOT implement the application yet. Do NOT create source code, package files, tests, configs, or other project files.
-Your only file-writing task is to create this exact file:
-
-${blueprintPath}
+  const prompt = `You are a senior software architect writing a detailed implementation blueprint/whitepaper.
 
 Project Name: ${projectName}
 Concept: ${concept}
 
-The document must be a comprehensive, concrete implementation blueprint for another coding agent to follow.
-Cover all standard architectural sections (Executive Summary, Requirements, System Architecture, Core Features, Data Model, API Design, Security, Definition of Done, etc.).
+Write a comprehensive, professional implementation whitepaper covering:
 
-Requirements for the document:
-- Use valid Markdown with clear headings.
-- Be specific enough that a coding agent can implement the project without guessing.
-- Do not implement anything else.
-- Do not create any file other than ${blueprintPath}.
-- Finish only after ${blueprintPath} has been written and is complete.`;
+1. **Executive Summary** — high-level vision and goals
+2. **System Architecture** — tech stack recommendations, architecture diagram description (ASCII), component breakdown
+3. **Core Features** — detailed feature list with priority (P0/P1/P2)
+4. **Data Model** — key entities, relationships, database schema outline
+5. **API Design** — RESTful or GraphQL endpoints, request/response shapes
+6. **Frontend Architecture** — component tree, state management, routing
+7. **Implementation Phases** — phased rollout plan (Phase 1: MVP, Phase 2: v1, Phase 3: v2)
+8. **Testing Strategy** — unit, integration, e2e
+9. **Deployment & DevOps** — CI/CD, hosting, monitoring
+10. **Future Roadmap** — post-v2 ideas
 
-  await runOpenCode({
-    model: MEDIUM_MODEL,
-    prompt,
-    projectPath,
-    logPath: join(projectPath, 'opencode-whitepaper.log'),
-    label: 'opencode whitepaper',
-  });
+Format this as a proper markdown document with headings, code blocks, and tables where appropriate. Be thorough and specific — this is a real implementation blueprint.`;
 
-  if (!existsSync(blueprintPath)) {
-    throw new Error(
-      `OpenCode completed successfully but did not create ${blueprintPath}.`
-    );
-  }
 
-  const whitepaperContent = readFileSync(blueprintPath, 'utf-8').trim();
-
-  if (!whitepaperContent) {
-    throw new Error(`OpenCode created an empty whitepaper: ${blueprintPath}`);
-  }
-
-  writeFileSync(docPath, whitepaperContent + '\n', 'utf-8');
-
-  console.log(`\n✅ Whitepaper saved to: ${docPath}`);
-  console.log(`✅ OpenCode specification retained in project: ${blueprintPath}`);
-
-  return { docPath, whitepaperContent, blueprintPath };
-}
-
-// ─── Step 2: Create project folder ──────────────────────────────────────────
-
-function getProjectPath(folderName) {
-  return join(homedir(), 'Code', folderName);
-}
-
-function assertOutputSlotsAvailable(folderName) {
-  const projectPath = getProjectPath(folderName);
-  const docPath = join(homedir(), 'Documents', `${folderName}-whitepaper.md`);
-
-  if (existsSync(projectPath)) {
-    throw new OutputCollisionError(`Project folder already exists: ${projectPath}`);
-  }
-
+  const docDir = join(homedir(), 'Documents');
+  docPath = join(docDir, `${slugify(projectName)}-whitepaper.md`);
+  mkdirSync(docDir, { recursive: true });
   if (existsSync(docPath)) {
-    throw new OutputCollisionError(`Whitepaper already exists: ${docPath}`);
+    console.log(`⚠️  Whitepaper already exists: ${docPath}`);
+    main()
+    return null
+  } else {
+    const response = await generate(MEDIUM_MODEL, prompt);
+    writeFileSync(docPath, `# ${projectName} — Implementation Blueprint\n\n## Concept\n\n${concept}\n\n---\n\n${response}`, 'utf-8');
+    console.log(`\n✅ Whitepaper saved to: ${docPath}`);
+    whitepaperContent = response
+    return docPath;
   }
 }
 
-function step2CreateProjectFolder(folderName) {
+// ─── Step 3: Create project folder ──────────────────────────────────────────
+
+async function step3CreateProjectFolder(projectName) {
   console.log('\n' + '='.repeat(60));
-  console.log('📁 STEP 2: Creating project folder');
+  console.log('📁 STEP 3: Creating project folder');
   console.log('='.repeat(60));
 
-  const projectPath = getProjectPath(folderName);
+  const folderName = slugify(projectName);
+  const projectPath = join(homedir(), 'Code', folderName);
 
   if (existsSync(projectPath)) {
-    throw new OutputCollisionError(`Project folder already exists: ${projectPath}`);
-  }
-
-  mkdirSync(projectPath, { recursive: true });
-  console.log(`✅ Created project folder: ${projectPath}`);
-
-  return projectPath;
-}
-
-// ─── Step 4: Run OpenCode to scaffold project ────────────────────────────────
-
-async function step4RunOpencode(projectName, concept, blueprintPath, projectPath) {
-  console.log('\n' + '='.repeat(60));
-  console.log('🚀 STEP 4: Running OpenCode to scaffold project from the specification');
-  console.log('='.repeat(60));
-
-  const gitignorePath = join(projectPath, '.gitignore');
-
-  if (!existsSync(blueprintPath)) {
-    throw new Error(`Implementation blueprint not found: ${blueprintPath}`);
-  }
-
-  writeFileSync(
-    gitignorePath,
-    [
-      '# AI Project Generator temporary files',
-      '.project-blueprint.md',
-      'opencode.log',
-      'opencode-debug.log',
-      'opencode-whitepaper.log',
-      '',
-    ].join('\n'),
-    'utf-8'
-  );
-
-  const prompt = `Create this project completely and make it functional.
-
-First, read ${blueprintPath} for the full private implementation blueprint.
-
-Requirements:
-- Implement all requested features without leaving placeholders or TODO-only code.
-- Include a useful README.md and appropriate .gitignore.
-- Provide .env.example if environment setup is needed.
-- Run tests and linting before finishing, fixing any errors encountered.
-- Do not delete the blueprint until you are finished.`;
-
-  const result = await runOpenCode({
-    model: LARGE_MODEL,
-    prompt,
-    projectPath,
-    logPath: join(projectPath, 'opencode.log'),
-    label: 'opencode scaffold',
-    allowFailure: true,
-  });
-
-  if (result.code !== 0) {
-    console.warn(
-      `\n⚠️ OpenCode scaffolding exited with code ${result.code ?? 'unknown'}. ` +
-      `The debug pass will attempt to repair the project.`
-    );
+    console.log(`⚠️  Project folder already exists: ${projectPath}`);
+    main()
+    return null
   } else {
-    console.log(`\n✅ OpenCode scaffolding completed in: ${projectPath}`);
+    mkdirSync(projectPath, { recursive: true });
+    console.log(`✅ Created project folder: ${projectPath}`);
   }
+
+  return { folderName, projectPath };
 }
 
-// ─── Step 4.5: Run OpenCode to debug project ────────────────────────────────
+// ─── Step 4: Run opencode to scaffold project ───────────────────────────────
 
-async function step45DebugOpencode(projectPath) {
+async function step4RunOpencode(projectName, concept, projectPath) {
   console.log('\n' + '='.repeat(60));
-  console.log('🚀 STEP 4.5: Running OpenCode to debug project');
+  console.log('🚀 STEP 4: Running opencode to scaffold project');
   console.log('='.repeat(60));
 
-  const blueprintPath = join(projectPath, '.project-blueprint.md');
+  const prompt = `Create project with these specs: ${concept}`;
 
-  const prompt = `Thoroughly inspect this project and fix all bugs and issues you can find. Do not skip any.
+  // Run opencode in the background so we can capture its PID and wait for it
+  const cmd = `cd "${projectPath}" && OLLAMA_HOST="${OLLAMA_HOST}" nohup ollama launch opencode --model "${LARGE_MODEL}" -- --agent="build" --prompt="${prompt}. IMPORTANT: Make sure the project is 100% complete and includes all features, a .gitignore, and a README. No placeholder/incomplete functions are allowed. Be sure example .env file is named ".env.example"! Make sure everything is complete and functional, test the code at the end, and if it doesn't work fix it, test it again, and do this over and over until it works. Private project blueprint contents (slugified): ${slugify(whitepaperContent, {replacement: ' ', remove: /[*+~.()'"!:|@\n]/g, strict: true, locale: 'en', trim: true})} ." > "${projectPath}/opencode.log" 2>&1 & echo $!`;
 
-Read ${blueprintPath} first so you understand the intended functionality.
+  console.log(`\nRunning in: ${projectPath}`);
+  console.log(`Command: ${cmd}`);
 
-Then:
-- Inspect the source code and configuration.
-- Run the relevant tests, builds, linters, type checks, or other validation commands.
-- Fix every bug, missing dependency, or incorrect configuration encountered.
-- Keep iterating until the project is working cleanly.`;
+  // Capture the PID of the backgrounded opencode process
+  const pid = runSilent(cmd);
+  console.log(`\n🚀 opencode launched in background (PID: ${pid})`);
 
-  await runOpenCode({
-    model: MEDIUM_MODEL,
-    prompt,
-    projectPath,
-    logPath: join(projectPath, 'opencode-debug.log'),
-    label: 'opencode debug',
-  });
+  // Wait for the opencode process to finish before proceeding
+  await waitForProcess(pid, 'opencode', 15000, 12000000);
 
-  console.log(`\n✅ OpenCode debug pass completed in: ${projectPath}`);
+  console.log(`\n✅ opencode completed in: ${projectPath}`);
 }
 
-// ─── Step 5: Publish to GitHub via GitHub API + git CLI ──────────────────────
+async function step45DebugOpencode(projectName, projectPath) {
+  console.log('\n' + '='.repeat(60));
+  console.log('🚀 STEP 4.5: Running opencode to debug project');
+  console.log('='.repeat(60));
 
-async function githubRequest(apiUrl, options, maxRetries = 3) {
-  let lastError = null;
+  // Run opencode in the background so we can capture its PID and wait for it
+  const cmd = `cd "${projectPath}" && OLLAMA_HOST="${OLLAMA_HOST}" nohup ollama launch opencode --model "${MEDIUM_MODEL}" -- --agent="build" --prompt="Please fix all bugs and issues in this project. Do not skip any!" > "${projectPath}/opencode-debug.log" 2>&1 & echo $!`;
+
+  console.log(`\nRunning in: ${projectPath}`);
+  console.log(`Command: ${cmd}`);
+
+  // Capture the PID of the backgrounded opencode process
+  const pid = runSilent(cmd);
+  console.log(`\n🚀 opencode launched in background (PID: ${pid})`);
+
+  // Wait for the opencode process to finish before proceeding
+  await waitForProcess(pid, 'opencode', 15000, 12000000);
+
+  console.log(`\n✅ opencode completed in: ${projectPath}`);
+}
+
+// ─── Step 5: Publish to GitHub via git CLI ──────────────────────────────────
+
+/**
+ * Retry a GitHub API curl call with exponential backoff.
+ * Handles transient failures (network blips, rate limiting, 5xx).
+ */
+async function curlGitHubWithRetry(apiUrl, body, maxRetries = 3) {
+  const escapedBody = body.replace(/'/g, "'\\''");
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+      const result = execSync(
+        `curl -s -X POST "${apiUrl}" \
+          -H "Authorization: token ${GITHUB_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d '${escapedBody}'`,
+        { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
+      );
 
-      let response;
-      try {
-        response = await fetch(apiUrl, {
-          ...options,
-          signal: controller.signal,
-        });
-      } finally {
-        clearTimeout(timeoutId);
+      const parsed = JSON.parse(result);
+
+      // Check for API-level errors
+      if (parsed.errors) {
+        const messages = parsed.errors.map(e => e.message).join(', ');
+        console.error(`❌ GitHub API error: ${messages}`);
+        console.error('   Full response:', JSON.stringify(parsed, null, 2));
+        return null;
       }
 
-      const rawBody = await response.text();
-      let body;
-      try {
-        body = rawBody ? JSON.parse(rawBody) : null;
-      } catch {
-        body = null;
+      // Check for rate limiting
+      if (parsed.message && parsed.message.toLowerCase().includes('rate limit')) {
+        const isLast = attempt === maxRetries;
+        console.warn(`⚠️  Rate limited by GitHub API (attempt ${attempt}/${maxRetries})`);
+        if (isLast) {
+          console.error('❌ All retries exhausted due to rate limiting. Try again later.');
+          return null;
+        }
+        const delay = Math.min(60000 * attempt, 120000); // 60s, 120s, 120s
+        console.log(`🔄 Waiting ${delay / 1000}s before retrying...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
       }
 
-      if (response.ok) return body;
-
-      const message =
-        body?.message ||
-        body?.errors?.map(e => e?.message).filter(Boolean).join(', ') ||
-        rawBody.slice(0, 500) ||
-        `HTTP ${response.status}`;
-
-      if (response.status !== 429 && response.status < 500) {
-        throw new Error(`GitHub API ${response.status}: ${message}`);
-      }
-
-      if (attempt === maxRetries) {
-        throw new Error(`GitHub API ${response.status}: ${message} (after ${maxRetries} attempts)`);
-      }
-
-      const retryAfter = Number(response.headers.get('retry-after'));
-      const delay = Number.isFinite(retryAfter) && retryAfter > 0
-        ? retryAfter * 1000
-        : Math.min(5000 * 2 ** (attempt - 1), 60000);
-
-      await sleep(delay);
+      return parsed;
     } catch (err) {
-      lastError = err;
-      if (attempt === maxRetries) throw lastError;
-      await sleep(RETRY_DELAY);
+      const isLast = attempt === maxRetries;
+
+      // execSync throws on non-zero exit — curl may have gotten a 4xx/5xx
+      const stderr = err.stderr || '';
+      const stdout = err.stdout || '';
+
+      // Try to parse stdout as JSON for a meaningful error message
+      let apiMessage = '';
+      try {
+        const parsed = JSON.parse(stdout);
+        apiMessage = parsed.message || (parsed.errors && parsed.errors[0] && parsed.errors[0].message) || '';
+      } catch { /* not JSON */ }
+
+      const context = apiMessage || stderr.slice(0, 200) || err.message;
+      console.warn(`⚠️  GitHub API request failed: ${context} (attempt ${attempt}/${maxRetries})`);
+
+      if (isLast) {
+        console.error(`❌ All ${maxRetries} attempts failed for GitHub API.`);
+        if (stdout) {
+          console.error('   Response body:', stdout.slice(0, 500));
+        }
+        return null;
+      }
+
+      const delay = Math.min(5000 * Math.pow(2, attempt - 1), 60000); // 5s, 10s, 20s
+      console.log(`🔄 Retrying in ${delay / 1000}s...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
-
-  throw lastError || new Error('GitHub API request failed.');
+  return null;
 }
 
-function writeAskPassHelper(filePath) {
-  const helper = `#!/bin/sh
-case "$1" in
-  *sername*) printf '%s\\n' "\${GIT_AUTH_USER:-x-access-token}" ;;
-  *assword*) printf '%s\\n' "\${GIT_AUTH_TOKEN}" ;;
-esac
-`;
-
-  writeFileSync(filePath, helper, 'utf-8');
-  chmodSync(filePath, 0o700);
-}
-
-function removeFileIfExists(filepath) {
-  try {
-    unlinkSync(filepath);
-  } catch (err) {
-    if (err.code !== 'ENOENT') {
-      console.warn(`⚠️ Could not remove ${filepath}: ${err.message}`);
-    }
-  }
-}
-
-async function step5PublishToGitHub(projectName, projectPath, folderName) {
+async function step5PublishToGitHub(projectName, projectPath) {
   console.log('\n' + '='.repeat(60));
-  console.log('🐙 STEP 5: Publishing to GitHub');
+  console.log('🐙 STEP 5: Publishing to GitHub via git CLI');
   console.log('='.repeat(60));
 
+  const repoName = slugify(projectName);
+
   if (!GITHUB_TOKEN) {
-    console.warn('⚠️ GITHUB_TOKEN not set in .env — skipping GitHub publish.');
-    return null;
+    console.warn('⚠️  GITHUB_TOKEN not set in .env — skipping GitHub publish.');
+    console.warn('   Set GITHUB_TOKEN in .env and run git init + push manually.');
+    return;
   }
 
   const owner = GITHUB_ORG || GITHUB_USER;
-
   if (!owner) {
-    console.warn('⚠️ Neither GITHUB_USER nor GITHUB_ORG is set — skipping GitHub publish.');
-    return null;
+    console.warn('⚠️  Neither GITHUB_USER nor GITHUB_ORG set in .env — skipping GitHub publish.');
+    return;
   }
 
-  const repoName = folderName;
+  // Create repo on GitHub via API (curl — the only curl call, for repo creation)
   const apiUrl = GITHUB_ORG
-    ? `https://api.github.com/orgs/${encodeURIComponent(owner)}/repos`
-    : 'https://api.github.com/user/repos';
+    ? `https://api.github.com/orgs/${owner}/repos`
+    : `https://api.github.com/user/repos`;
 
-  const body = {
+  const body = JSON.stringify({
     name: repoName,
     description: `AI-generated project: ${projectName}`,
     private: false,
     auto_init: false,
-  };
+  });
 
   console.log(`\n📡 Creating GitHub repository "${owner}/${repoName}"...`);
 
-  const parsed = await githubRequest(apiUrl, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${GITHUB_TOKEN}`,
-      'X-GitHub-Api-Version': '2022-11-28',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!parsed?.clone_url || !parsed?.html_url) {
-    throw new Error(`GitHub returned an unexpected response while creating ${owner}/${repoName}.`);
+  const parsed = await curlGitHubWithRetry(apiUrl, body);
+  if (!parsed) {
+    console.error('❌ Failed to create GitHub repository. Skipping publish.');
+    return;
   }
 
-  const repoUrl = parsed.clone_url;
-  const repoHtmlUrl = parsed.html_url;
-
+  const repoUrl = parsed.clone_url || `https://github.com/${owner}/${repoName}.git`;
+  const repoHtmlUrl = parsed.html_url || `https://github.com/${owner}/${repoName}`;
   console.log(`✅ GitHub repository created: ${repoHtmlUrl}`);
 
-  const generatorOnlyFiles = new Set([
-    '.project-blueprint.md',
-    'opencode.log',
-    'opencode-debug.log',
-  ]);
-
-  const projectEntries = readdirSync(projectPath, { withFileTypes: true })
-    .filter(entry => entry.name !== '.git')
-    .filter(entry => !generatorOnlyFiles.has(entry.name))
-    .filter(entry => entry.name !== '.gitignore');
-
-  if (projectEntries.length === 0) {
-    throw new Error('OpenCode produced no actual project files. Refusing to publish an empty project.');
-  }
-
+  // Configure git remote with token embedded for auth, then push
   console.log('\n📦 Initializing git and pushing...');
 
-  run('git', ['init'], { cwd: projectPath });
-  run('git', ['config', 'user.name', 'AI Project Generator'], { cwd: projectPath });
-  run('git', ['config', 'user.email', 'ai@project-generator.local'], { cwd: projectPath });
+  const authUrl = `https://${owner}:${GITHUB_TOKEN}@github.com/${owner}/${repoName}.git`;
 
-  run('git', ['add', '--all'], { cwd: projectPath });
-  run('git', ['commit', '-m', `Initial commit: ${projectName}`], { cwd: projectPath });
-
+  // Ensure git user is configured (required for `git commit` to succeed)
+  let hasUserConfig = false;
   try {
-    run('git', ['remote', 'remove', 'origin'], { cwd: projectPath });
-  } catch {}
-
-  run('git', ['remote', 'add', 'origin', repoUrl], { cwd: projectPath });
-  run('git', ['branch', '-M', 'main'], { cwd: projectPath });
-
-  const askPassPath = join(tmpdir(), `ai-project-generator-askpass-${process.pid}.sh`);
-  writeAskPassHelper(askPassPath);
-
-  try {
-    const pushEnv = {
-      ...process.env,
-      GIT_AUTH_USER: GITHUB_USER || owner,
-      GIT_AUTH_TOKEN: GITHUB_TOKEN,
-      GIT_ASKPASS: askPassPath,
-      GIT_TERMINAL_PROMPT: '0',
-    };
-
-    run('git', ['push', '-u', 'origin', 'main'], {
-      cwd: projectPath,
-      env: pushEnv,
-    });
-  } finally {
-    removeFileIfExists(askPassPath);
+    const name = runSilent('git config user.name', { cwd: projectPath });
+    const email = runSilent('git config user.email', { cwd: projectPath });
+    hasUserConfig = !!(name && email);
+  } catch {
+    hasUserConfig = false;
   }
 
-  console.log(`\n✅ Published to GitHub: ${repoHtmlUrl}`);
+  const commands = [
+    'git init',
+    'git add .',
+  ];
 
-  return repoHtmlUrl;
+  if (!hasUserConfig) {
+    console.log('⚙️  Git user not configured globally — setting temporary commit author');
+    commands.push(
+      'git config user.name "AI Project Generator"',
+      'git config user.email "ai@project-generator.local"',
+    );
+  }
+
+  commands.push(
+    `git commit -m "Initial commit: ${projectName}"`,
+    `git remote add origin ${authUrl} 2>/dev/null; git remote set-url origin ${authUrl}`,
+    'git branch -M main',
+    'git push -u origin main',
+  );
+
+  for (const cmd of commands) {
+    try {
+      run(cmd, { cwd: projectPath });
+    } catch (err) {
+      console.error(`⚠️  Command failed: ${cmd}`);
+      console.error(`   ${err.message}`);
+    }
+  }
+
+  // Update remote to not expose token in plain text
+  try {
+    run(`git remote set-url origin https://github.com/${owner}/${repoName}.git`, { cwd: projectPath });
+    console.log('🔒 Cleaned up remote URL (removed token)');
+  } catch (_) {}
+
+  console.log(`\n✅ Published to GitHub: ${repoHtmlUrl}`);
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
-  assertPrerequisites();
-
   console.log('\n' + '█'.repeat(60));
   console.log('█   🤖 AI PROJECT GENERATOR');
   console.log('█'.repeat(60));
-
   console.log(`\n📌 Small model: ${SMALL_MODEL}`);
-  console.log(`📌 Medium model: ${MEDIUM_MODEL}`);
   console.log(`📌 Large model: ${LARGE_MODEL}`);
   console.log(`📌 Ollama host: ${OLLAMA_HOST}`);
   console.log(`📌 Seed idea: ${PROMPT_PREFIX}`);
-
   while (true) {
-    try {
-      const { projectName, concept, folderName } = await step1GenerateConcept();
-
-      assertOutputSlotsAvailable(folderName);
-
-      const projectPath = step2CreateProjectFolder(folderName);
-
-      const { docPath, blueprintPath } = await step3GenerateWhitepaper(
-        projectName,
-        concept,
-        folderName,
-        projectPath
-      );
-
-      await step4RunOpencode(projectName, concept, blueprintPath, projectPath);
-      await step45DebugOpencode(projectPath);
-
-      removeFileIfExists(join(projectPath, '.project-blueprint.md'));
-      removeFileIfExists(join(projectPath, 'opencode-whitepaper.log'));
-
-      const repoUrl = await step5PublishToGitHub(projectName, projectPath, folderName);
-
-      console.log('\n' + '✅'.repeat(30));
-      console.log('\n🎉 ALL DONE!');
-      console.log(`   📄 Whitepaper: ${docPath}`);
-      console.log(`   📁 Project:    ${projectPath}`);
-      console.log(`   🐙 Repo:       ${repoUrl || '(GitHub publish skipped)'}`);
-      console.log('\n📁 Moving on to next project...');
-    } catch (err) {
-      if (err instanceof OutputCollisionError) {
-        console.warn(`\n⚠️ ${err.message}`);
-        console.log('\n🔄 Destination already exists; generating a fresh project...\n');
-        continue;
-      }
-
-      throw err;
+    const { projectName, concept } = await step1GenerateConcept();
+    const whitepaperPath = await step2GenerateWhitepaper(projectName, concept);
+    if (whitepaperPath === null) {
+      console.log('🔄 Restarting loop to generate a fresh concept...');
+      continue; 
     }
+    const { folderName, projectPath } = await step3CreateProjectFolder(projectName);
+    if (projectPath === null) {
+      console.log('🔄 Restarting loop to generate a fresh concept...');
+      continue; 
+    }
+    await step4RunOpencode(projectName, concept, projectPath);
+    await step45DebugOpencode(projectName, projectPath)
+    await step5PublishToGitHub(projectName, projectPath);
+
+    console.log('\n' + '✅'.repeat(30));
+    console.log(`\n🎉 ALL DONE!`);
+    console.log(`   📄 Whitepaper: ${whitepaperPath}`);
+    console.log(`   📁 Project:    ${projectPath}`);
+    console.log(`   🐙 Repo name:  ${folderName}`);
+    console.log('\n');
+    console.log("📁 Moving on to next project...")
   }
 }
 
 main().catch((err) => {
-  console.error('\n❌ Fatal error:', err?.stack || err?.message || err);
+  console.error('\n❌ Fatal error:', err);
   process.exit(1);
 });
