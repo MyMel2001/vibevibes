@@ -258,6 +258,27 @@ function assertPrerequisites() {
  * Run OpenCode directly inside the project directory so generated files
  * are guaranteed to stay inside `projectPath`.
  */
+function normalizeOpenCodeModel(model) {
+  const value = String(model ?? '').trim();
+  if (!value) {
+    throw new Error('OpenCode model is empty. Set MEDIUM_MODEL/LARGE_MODEL in .env.');
+  }
+
+  // OpenCode expects provider/model. Plain Ollama model names are routed
+  // through the Ollama provider.
+  return value.includes('/') ? value : `ollama/${value}`;
+}
+
+function readLogTail(logPath, maxChars = 12000) {
+  try {
+    const content = readFileSync(logPath, 'utf-8');
+    if (!content) return '(OpenCode produced no log output.)';
+    return content.length > maxChars ? `…${content.slice(-maxChars)}` : content;
+  } catch (err) {
+    return `(Could not read OpenCode log: ${err.message})`;
+  }
+}
+
 function runOpenCode({
   model,
   prompt,
@@ -279,11 +300,13 @@ function runOpenCode({
     let timeoutId;
     let killTimer;
 
-    // OpenCode reads model/provider configuration from environment variables
+    const openCodeModel = normalizeOpenCodeModel(model);
+
+    // Keep OLLAMA_HOST available to Ollama tooling. OpenCode receives the
+    // model explicitly through its CLI --model option.
     const childEnv = {
       ...process.env,
       OLLAMA_HOST,
-      OPENCODE_MODEL: model,
     };
 
     // Use absolute blueprint path inside prompt to prevent root-level output
@@ -293,8 +316,9 @@ function runOpenCode({
       absoluteBlueprint
     );
 
-    // Clean execution args for opencode run
-    const args = ['run', enrichedPrompt];
+    // OpenCode's CLI expects --model provider/model. --auto permits the
+    // non-interactive run to perform file/tool operations without prompting.
+    const args = ['run', '--model', openCodeModel, '--auto', enrichedPrompt];
 
     const child = spawn('opencode', args, {
       cwd: projectPath,
@@ -345,9 +369,12 @@ function runOpenCode({
         return;
       }
 
+      const logTail = readLogTail(logPath);
+
       const error = new Error(
         `${label} exited with code ${code ?? 'unknown'}` +
-        (signal ? ` (signal ${signal})` : '')
+        (signal ? ` (signal ${signal})` : '') +
+        `\\n\\nLast OpenCode output from ${logPath}:\\n${logTail}`
       );
       error.exitCode = code;
       error.signal = signal;
@@ -571,7 +598,7 @@ Requirements:
 - Run tests and linting before finishing, fixing any errors encountered.
 - Do not delete the blueprint until you are finished.`;
 
-  await runOpenCode({
+  const result = await runOpenCode({
     model: LARGE_MODEL,
     prompt,
     projectPath,
@@ -580,7 +607,14 @@ Requirements:
     allowFailure: true,
   });
 
-  console.log(`\n✅ OpenCode scaffolding completed in: ${projectPath}`);
+  if (result.code !== 0) {
+    console.warn(
+      `\n⚠️ OpenCode scaffolding exited with code ${result.code ?? 'unknown'}. ` +
+      `The debug pass will attempt to repair the project.`
+    );
+  } else {
+    console.log(`\n✅ OpenCode scaffolding completed in: ${projectPath}`);
+  }
 }
 
 // ─── Step 4.5: Run OpenCode to debug project ────────────────────────────────
