@@ -79,6 +79,7 @@ async function generateWithRetry(model, prompt, retries = MAX_RETRIES) {
         prompt,
         options: { temperature: 0.7 },
         signal: controller.signal,
+        timeout: REQUEST_TIMEOUT,
       });
 
       clearTimeout(timeoutId);
