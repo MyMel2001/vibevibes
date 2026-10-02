@@ -1,4 +1,3 @@
-
 #!/usr/bin/env node
 
 /**
@@ -50,7 +49,6 @@ function loadEnv(filepath) {
 
     if (!trimmed || trimmed.startsWith('#')) continue;
 
-    // Support normal .env syntax and "export KEY=value".
     if (trimmed.startsWith('export ')) {
       trimmed = trimmed.slice(7).trim();
     }
@@ -63,7 +61,6 @@ function loadEnv(filepath) {
 
     let value = trimmed.slice(eqIdx + 1).trim();
 
-    // Strip matching quotes.
     if (
       (value.startsWith('"') && value.endsWith('"')) ||
       (value.startsWith("'") && value.endsWith("'"))
@@ -80,7 +77,6 @@ function loadEnv(filepath) {
 const envPath = join(__dirname, '.env');
 const fileEnv = loadEnv(envPath);
 
-// Environment variables supplied by the shell take precedence over .env.
 const getEnv = (key, fallback = '') => process.env[key] ?? fileEnv[key] ?? fallback;
 
 const OLLAMA_HOST = getEnv('OLLAMA_HOST', 'http://localhost:11434');
@@ -94,11 +90,11 @@ const PROMPT_PREFIX = getEnv('PROMPT_PREFIX', 'A modern web application that');
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const REQUEST_TIMEOUT = Math.max(60000, Number.parseInt(getEnv('REQUEST_TIMEOUT_MS', '1800000'), 10) || 1800000); // 30 minutes by default
+const REQUEST_TIMEOUT = Math.max(60000, Number.parseInt(getEnv('REQUEST_TIMEOUT_MS', '1800000'), 10) || 1800000);
 const MAX_RETRIES = 3;
-const RETRY_DELAY = 10000; // 10 seconds
-const OPENCODE_TIMEOUT = 12000000; // 200 minutes
-const OPENCODE_TERM_GRACE = 10000; // 10 seconds
+const RETRY_DELAY = 10000;
+const OPENCODE_TIMEOUT = 12000000;
+const OPENCODE_TERM_GRACE = 10000;
 
 class OutputCollisionError extends Error {
   constructor(message) {
@@ -125,11 +121,6 @@ async function generateWithRetry(model, prompt, retries = MAX_RETRIES) {
     let timedOut = false;
 
     try {
-      // Use Ollama streaming for long generations. Non-streaming requests can
-      // spend several minutes waiting for the first response headers when a
-      // large/slow model is loaded, which can surface as the vague
-      // `TypeError: fetch failed`. Streaming starts the HTTP response early
-      // and lets us receive tokens as they are generated.
       const stream = await ollama.generate({
         model,
         prompt,
@@ -141,9 +132,7 @@ async function generateWithRetry(model, prompt, retries = MAX_RETRIES) {
         timedOut = true;
         try {
           ollama.abort();
-        } catch {
-          // Ignore abort cleanup errors; the iterator will report the failure.
-        }
+        } catch {}
       }, REQUEST_TIMEOUT);
 
       let output = '';
@@ -217,13 +206,11 @@ const generate = generateWithRetry;
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function slugify(value) {
-  const slug = String(value ?? '')
+  return String(value ?? '')
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-+|-+$/g, '');
-
-  return slug;
 }
 
 function cleanProjectName(value) {
@@ -260,7 +247,7 @@ function commandExists(command) {
 }
 
 function assertPrerequisites() {
-  for (const command of ['ollama', 'git']) {
+  for (const command of ['ollama', 'git', 'opencode']) {
     if (!commandExists(command)) {
       throw new Error(`Required command "${command}" was not found in PATH.`);
     }
@@ -268,13 +255,7 @@ function assertPrerequisites() {
 }
 
 /**
- * Run OpenCode non-interactively and wait for the actual child process.
- *
- * This avoids:
- * - shell quoting/injection problems
- * - fragile "nohup ... & echo $!" PID tracking
- * - incorrectly treating a still-running child as finished
- * - huge prompts being embedded directly in a shell command
+ * Run OpenCode directly in target process dir to prevent blueprints emitting in root app dir.
  */
 function runOpenCode({
   model,
@@ -302,21 +283,22 @@ function runOpenCode({
       OLLAMA_HOST,
     };
 
-    // Current OpenCode supports `run` for non-interactive scripted work,
-    // and `--agent build` selects the build agent.
+    const absoluteBlueprint = join(projectPath, '.project-blueprint.md');
+    const enrichedPrompt = prompt.replace(
+      /\.project-blueprint\.md/g,
+      absoluteBlueprint
+    );
+
     const args = [
-      'launch',
-      'opencode',
+      'run',
       '--model',
       model,
-      '--',
-      'run',
       '--agent',
       'build',
-      prompt,
+      enrichedPrompt,
     ];
 
-    const child = spawn('ollama', args, {
+    const child = spawn('opencode', args, {
       cwd: projectPath,
       env: childEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -344,11 +326,7 @@ function runOpenCode({
     });
 
     child.once('close', (code, signal) => {
-      const result = {
-        code,
-        signal,
-        timedOut,
-      };
+      const result = { code, signal, timedOut };
 
       if (timedOut) {
         const error = new Error(`${label} timed out after ${timeout / 1000}s.`);
@@ -412,7 +390,7 @@ async function step1GenerateConcept() {
   console.log('📋 STEP 1: Generating project name & concept');
   console.log('='.repeat(60));
 
-  const prompt = `You are a creative product strategist. Based on the following seed idea, come up with a unique, catchy project name (one or two words, no existing well-known names) and a one-paragraph concept description. Make sure the project name and concept are original and aren't repetitive or redundant (i.e. don't spam "Node" this or "Flux" that in names - use names relevant yet catchy and unique).
+  const prompt = `You are a creative product strategist. Based on the following seed idea, come up with a unique, catchy project name (one or two words, no existing well-known names) and a one-paragraph concept description. Make sure the project name and concept are original and aren't repetitive or redundant.
 
 Seed idea: ${PROMPT_PREFIX}
 
@@ -436,16 +414,10 @@ CONCEPT: <one-paragraph description>`;
   }
 
   const projectName = cleanProjectName(nameMatch[1]);
-  const concept = conceptMatch
-    ? conceptMatch[1].trim()
-    : response.trim();
+  const concept = conceptMatch ? conceptMatch[1].trim() : response.trim();
 
-  if (!projectName) {
-    throw new Error('The model returned an empty project name.');
-  }
-
-  if (!concept) {
-    throw new Error('The model returned an empty concept.');
+  if (!projectName || !concept) {
+    throw new Error('The model returned an empty project name or concept.');
   }
 
   const folderName = slugify(projectName);
@@ -485,39 +457,20 @@ Your task is to write a complete implementation specification for a brand-new pr
 Do NOT implement the application yet. Do NOT create source code, package files, tests, configs, or other project files.
 Your only file-writing task is to create this exact file:
 
-.project-blueprint.md
+${blueprintPath}
 
 Project Name: ${projectName}
 Concept: ${concept}
 
 The document must be a comprehensive, concrete implementation blueprint for another coding agent to follow.
-Cover all of the following:
-
-1. Executive Summary — vision, goals, intended users, and scope
-2. Requirements — functional and non-functional requirements
-3. System Architecture — recommended stack, major components, boundaries, data flow, and an ASCII architecture diagram
-4. Core Features — detailed features with P0/P1/P2 priorities and acceptance criteria
-5. Data Model — entities, relationships, important fields, constraints, and schema outline
-6. API Design — endpoints or operations, request/response shapes, validation, authentication/authorization where applicable
-7. Frontend Architecture — pages, component tree, state management, routing, and UX behavior where applicable
-8. Backend Architecture — services, modules, background jobs, integrations, and error handling where applicable
-9. Security & Privacy — relevant threats, secrets handling, input validation, and safe defaults
-10. Implementation Plan — Phase 1 MVP, Phase 2 v1, Phase 3 v2, with concrete deliverables
-11. Testing Strategy — unit, integration, end-to-end, and manual verification requirements
-12. Deployment & DevOps — local development, build, deployment, CI/CD, monitoring, and backups where applicable
-13. Project Structure — recommended directory/file tree
-14. Definition of Done — explicit conditions that must be true before the implementation is considered complete
-15. Future Roadmap — sensible post-v2 ideas
+Cover all standard architectural sections (Executive Summary, Requirements, System Architecture, Core Features, Data Model, API Design, Security, Definition of Done, etc.).
 
 Requirements for the document:
 - Use valid Markdown with clear headings.
-- Be specific enough that a coding agent can implement the project without guessing about the intended design.
-- Prefer concrete decisions and explain important tradeoffs briefly.
-- Include tables and code blocks where they improve clarity.
-- Do not use placeholder text such as 'TBD' unless the concept genuinely requires a decision to be made later.
-- Do not implement anything.
-- Do not create any file other than .project-blueprint.md.
-- Finish only after .project-blueprint.md has been written and is complete.`;
+- Be specific enough that a coding agent can implement the project without guessing.
+- Do not implement anything else.
+- Do not create any file other than ${blueprintPath}.
+- Finish only after ${blueprintPath} has been written and is complete.`;
 
   await runOpenCode({
     model: MEDIUM_MODEL,
@@ -539,17 +492,12 @@ Requirements for the document:
     throw new Error(`OpenCode created an empty whitepaper: ${blueprintPath}`);
   }
 
-  // Save the same document to ~/Documents for the existing workflow.
   writeFileSync(docPath, whitepaperContent + '\n', 'utf-8');
 
   console.log(`\n✅ Whitepaper saved to: ${docPath}`);
   console.log(`✅ OpenCode specification retained in project: ${blueprintPath}`);
 
-  return {
-    docPath,
-    whitepaperContent,
-    blueprintPath,
-  };
+  return { docPath, whitepaperContent, blueprintPath };
 }
 
 // ─── Step 2: Create project folder ──────────────────────────────────────────
@@ -601,7 +549,6 @@ async function step4RunOpencode(projectName, concept, blueprintPath, projectPath
     throw new Error(`Implementation blueprint not found: ${blueprintPath}`);
   }
 
-  // Ensure the private blueprint and generated logs are never published.
   writeFileSync(
     gitignorePath,
     [
@@ -617,30 +564,23 @@ async function step4RunOpencode(projectName, concept, blueprintPath, projectPath
 
   const prompt = `Create this project completely and make it functional.
 
-First, read .project-blueprint.md for the full private implementation blueprint.
+First, read ${blueprintPath} for the full private implementation blueprint.
 
 Requirements:
-- Implement all requested features; do not leave placeholders, TODO-only functions, mock implementations, or unfinished sections.
-- Include a useful README.md.
-- Include a .gitignore appropriate for the project.
-- If environment configuration is needed, provide .env.example (not .env).
-- Run the project's relevant tests, checks, build, or lint commands before finishing.
-- If anything fails, diagnose it, fix it, and run the checks again.
-- Keep iterating until the project is in a working state.
-- Do not delete the blueprint until you are finished using it.`;
+- Implement all requested features without leaving placeholders or TODO-only code.
+- Include a useful README.md and appropriate .gitignore.
+- Provide .env.example if environment setup is needed.
+- Run tests and linting before finishing, fixing any errors encountered.
+- Do not delete the blueprint until you are finished.`;
 
-  try {
-    await runOpenCode({
-      model: LARGE_MODEL,
-      prompt,
-      projectPath,
-      logPath: join(projectPath, 'opencode.log'),
-      label: 'opencode scaffold',
-      allowFailure: true,
-    });
-  } finally {
-    // Keep the blueprint available for the debug pass; it is already ignored.
-  }
+  await runOpenCode({
+    model: LARGE_MODEL,
+    prompt,
+    projectPath,
+    logPath: join(projectPath, 'opencode.log'),
+    label: 'opencode scaffold',
+    allowFailure: true,
+  });
 
   console.log(`\n✅ OpenCode scaffolding completed in: ${projectPath}`);
 }
@@ -652,18 +592,17 @@ async function step45DebugOpencode(projectPath) {
   console.log('🚀 STEP 4.5: Running OpenCode to debug project');
   console.log('='.repeat(60));
 
+  const blueprintPath = join(projectPath, '.project-blueprint.md');
+
   const prompt = `Thoroughly inspect this project and fix all bugs and issues you can find. Do not skip any.
 
-Read .project-blueprint.md first so you understand the intended functionality.
+Read ${blueprintPath} first so you understand the intended functionality.
 
 Then:
 - Inspect the source code and configuration.
 - Run the relevant tests, builds, linters, type checks, or other validation commands.
-- Fix every concrete bug, broken feature, missing dependency, incorrect configuration, and obvious integration issue you encounter.
-- Do not leave placeholder implementations.
-- Re-run validation after each set of fixes.
-- Keep iterating until the project is working as completely as practical.
-- Ensure README.md and .env.example remain accurate.`;
+- Fix every bug, missing dependency, or incorrect configuration encountered.
+- Keep iterating until the project is working cleanly.`;
 
   await runOpenCode({
     model: MEDIUM_MODEL,
@@ -679,19 +618,14 @@ Then:
 // ─── Step 5: Publish to GitHub via GitHub API + git CLI ──────────────────────
 
 async function githubRequest(apiUrl, options, maxRetries = 3) {
-  if (typeof fetch !== 'function') {
-    throw new Error('This script requires Node.js with global fetch support (Node 18+).');
-  }
-
   let lastError = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    let response;
-
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
 
+      let response;
       try {
         response = await fetch(apiUrl, {
           ...options,
@@ -700,89 +634,48 @@ async function githubRequest(apiUrl, options, maxRetries = 3) {
       } finally {
         clearTimeout(timeoutId);
       }
-    } catch (err) {
-      lastError = err;
 
-      const isTimeout =
-        err?.name === 'AbortError' ||
-        err?.code === 'UND_ERR_HEADERS_TIMEOUT';
+      const rawBody = await response.text();
+      let body;
+      try {
+        body = rawBody ? JSON.parse(rawBody) : null;
+      } catch {
+        body = null;
+      }
 
-      if (isTimeout) {
-        console.warn(
-          `⏰ GitHub request timed out (attempt ${attempt}/${maxRetries})`
-        );
-      } else {
-        console.warn(
-          `⚠️ GitHub request failed: ${err?.message || String(err)} ` +
-          `(attempt ${attempt}/${maxRetries})`
-        );
+      if (response.ok) return body;
+
+      const message =
+        body?.message ||
+        body?.errors?.map(e => e?.message).filter(Boolean).join(', ') ||
+        rawBody.slice(0, 500) ||
+        `HTTP ${response.status}`;
+
+      if (response.status !== 429 && response.status < 500) {
+        throw new Error(`GitHub API ${response.status}: ${message}`);
       }
 
       if (attempt === maxRetries) {
-        throw lastError;
+        throw new Error(`GitHub API ${response.status}: ${message} (after ${maxRetries} attempts)`);
       }
 
-      const delay = Math.min(5000 * 2 ** (attempt - 1), 60000);
-      console.log(`🔄 Retrying in ${delay / 1000}s...`);
+      const retryAfter = Number(response.headers.get('retry-after'));
+      const delay = Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : Math.min(5000 * 2 ** (attempt - 1), 60000);
+
       await sleep(delay);
-      continue;
+    } catch (err) {
+      lastError = err;
+      if (attempt === maxRetries) throw lastError;
+      await sleep(RETRY_DELAY);
     }
-
-    const rawBody = await response.text();
-
-    let body;
-    try {
-      body = rawBody ? JSON.parse(rawBody) : null;
-    } catch {
-      body = null;
-    }
-
-    if (response.ok) {
-      return body;
-    }
-
-    const message =
-      body?.message ||
-      body?.errors?.map(error => error?.message).filter(Boolean).join(', ') ||
-      rawBody.slice(0, 500) ||
-      `HTTP ${response.status}`;
-
-    const retryable =
-      response.status === 429 ||
-      response.status >= 500;
-
-    // Do not retry permanent API errors such as bad credentials,
-    // insufficient permissions, validation failures, or an existing repo.
-    if (!retryable) {
-      throw new Error(`GitHub API ${response.status}: ${message}`);
-    }
-
-    if (attempt === maxRetries) {
-      throw new Error(
-        `GitHub API ${response.status}: ${message} ` +
-        `(after ${maxRetries} attempts)`
-      );
-    }
-
-    const retryAfter = Number(response.headers.get('retry-after'));
-    const delay = Number.isFinite(retryAfter) && retryAfter > 0
-      ? retryAfter * 1000
-      : Math.min(5000 * 2 ** (attempt - 1), 60000);
-
-    console.warn(
-      `⚠️ GitHub API request failed: ${message} ` +
-      `(attempt ${attempt}/${maxRetries})`
-    );
-    console.log(`🔄 Retrying in ${delay / 1000}s...`);
-    await sleep(delay);
   }
 
   throw lastError || new Error('GitHub API request failed.');
 }
 
 function writeAskPassHelper(filePath) {
-  // The token stays in the environment instead of appearing in the remote URL,
-  // command line, or .git/config.
   const helper = `#!/bin/sh
 case "$1" in
   *sername*) printf '%s\\n' "\${GIT_AUTH_USER:-x-access-token}" ;;
@@ -817,9 +710,7 @@ async function step5PublishToGitHub(projectName, projectPath, folderName) {
   const owner = GITHUB_ORG || GITHUB_USER;
 
   if (!owner) {
-    console.warn(
-      '⚠️ Neither GITHUB_USER nor GITHUB_ORG is set in .env — skipping GitHub publish.'
-    );
+    console.warn('⚠️ Neither GITHUB_USER nor GITHUB_ORG is set — skipping GitHub publish.');
     return null;
   }
 
@@ -842,16 +733,14 @@ async function step5PublishToGitHub(projectName, projectPath, folderName) {
     headers: {
       Accept: 'application/vnd.github+json',
       Authorization: `Bearer ${GITHUB_TOKEN}`,
-      'X-GitHub-Api-Version': '2026-03-10',
+      'X-GitHub-Api-Version': '2022-11-28',
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
   });
 
   if (!parsed?.clone_url || !parsed?.html_url) {
-    throw new Error(
-      `GitHub returned an unexpected response while creating ${owner}/${repoName}.`
-    );
+    throw new Error(`GitHub returned an unexpected response while creating ${owner}/${repoName}.`);
   }
 
   const repoUrl = parsed.clone_url;
@@ -859,8 +748,6 @@ async function step5PublishToGitHub(projectName, projectPath, folderName) {
 
   console.log(`✅ GitHub repository created: ${repoHtmlUrl}`);
 
-  // Make sure the generated project has something to commit.
-  // `git status` cannot be used until the repository has been initialized.
   const generatorOnlyFiles = new Set([
     '.project-blueprint.md',
     'opencode.log',
@@ -873,83 +760,26 @@ async function step5PublishToGitHub(projectName, projectPath, folderName) {
     .filter(entry => entry.name !== '.gitignore');
 
   if (projectEntries.length === 0) {
-    throw new Error(
-      'OpenCode produced no actual project files. Refusing to publish an empty project.'
-    );
+    throw new Error('OpenCode produced no actual project files. Refusing to publish an empty project.');
   }
 
   console.log('\n📦 Initializing git and pushing...');
 
-  let hasUserConfig = false;
-
-  try {
-    const name = runSilent('git', ['config', 'user.name'], { cwd: projectPath });
-    const email = runSilent('git', ['config', 'user.email'], { cwd: projectPath });
-    hasUserConfig = Boolean(name && email);
-  } catch {
-    hasUserConfig = false;
-  }
-
   run('git', ['init'], { cwd: projectPath });
-
-  if (!hasUserConfig) {
-    console.log('⚙️ Git user not configured — setting temporary local commit author.');
-    run(
-      'git',
-      ['config', 'user.name', 'AI Project Generator'],
-      { cwd: projectPath }
-    );
-    run(
-      'git',
-      ['config', 'user.email', 'ai@project-generator.local'],
-      { cwd: projectPath }
-    );
-  }
+  run('git', ['config', 'user.name', 'AI Project Generator'], { cwd: projectPath });
+  run('git', ['config', 'user.email', 'ai@project-generator.local'], { cwd: projectPath });
 
   run('git', ['add', '--all'], { cwd: projectPath });
+  run('git', ['commit', '-m', `Initial commit: ${projectName}`], { cwd: projectPath });
 
-  let stagedOutput;
   try {
-    stagedOutput = runSilent('git', ['diff', '--cached', '--name-only'], {
-      cwd: projectPath,
-    });
-  } catch (err) {
-    throw new Error(`Unable to inspect staged files: ${err.message}`);
-  }
+    run('git', ['remote', 'remove', 'origin'], { cwd: projectPath });
+  } catch {}
 
-  if (!stagedOutput.trim()) {
-    throw new Error('Nothing was staged for the initial commit.');
-  }
+  run('git', ['remote', 'add', 'origin', repoUrl], { cwd: projectPath });
+  run('git', ['branch', '-M', 'main'], { cwd: projectPath });
 
-  run(
-    'git',
-    ['commit', '-m', `Initial commit: ${projectName}`],
-    { cwd: projectPath }
-  );
-
-  // Use a clean remote URL and a temporary GIT_ASKPASS helper so the token
-  // is never stored in .git/config or exposed in the command line.
-  try {
-    run('git', ['remote', 'remove', 'origin'], {
-      cwd: projectPath,
-    });
-  } catch {
-    // Remote did not exist; that is fine.
-  }
-
-  run('git', ['remote', 'add', 'origin', repoUrl], {
-    cwd: projectPath,
-  });
-
-  run('git', ['branch', '-M', 'main'], {
-    cwd: projectPath,
-  });
-
-  const askPassPath = join(
-    tmpdir(),
-    `ai-project-generator-askpass-${process.pid}.sh`
-  );
-
+  const askPassPath = join(tmpdir(), `ai-project-generator-askpass-${process.pid}.sh`);
   writeAskPassHelper(askPassPath);
 
   try {
@@ -991,47 +821,26 @@ async function main() {
 
   while (true) {
     try {
-      const {
-        projectName,
-        concept,
-        folderName,
-      } = await step1GenerateConcept();
+      const { projectName, concept, folderName } = await step1GenerateConcept();
 
-      // Check both destinations before spending more inference time or
-      // creating an orphaned project.
       assertOutputSlotsAvailable(folderName);
 
       const projectPath = step2CreateProjectFolder(folderName);
 
-      const {
-        docPath,
-        blueprintPath,
-      } = await step3GenerateWhitepaper(
+      const { docPath, blueprintPath } = await step3GenerateWhitepaper(
         projectName,
         concept,
         folderName,
         projectPath
       );
 
-      await step4RunOpencode(
-        projectName,
-        concept,
-        blueprintPath,
-        projectPath
-      );
-
+      await step4RunOpencode(projectName, concept, blueprintPath, projectPath);
       await step45DebugOpencode(projectPath);
 
-      // The blueprint is only an agent working file; the canonical copy is
-      // already saved under ~/Documents.
       removeFileIfExists(join(projectPath, '.project-blueprint.md'));
       removeFileIfExists(join(projectPath, 'opencode-whitepaper.log'));
 
-      const repoUrl = await step5PublishToGitHub(
-        projectName,
-        projectPath,
-        folderName
-      );
+      const repoUrl = await step5PublishToGitHub(projectName, projectPath, folderName);
 
       console.log('\n' + '✅'.repeat(30));
       console.log('\n🎉 ALL DONE!');
@@ -1055,4 +864,3 @@ main().catch((err) => {
   console.error('\n❌ Fatal error:', err?.stack || err?.message || err);
   process.exit(1);
 });
-
