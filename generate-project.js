@@ -63,7 +63,7 @@ const PROMPT_PREFIX = env.PROMPT_PREFIX || 'A modern web application that';
 
 const ollama = new Ollama({ host: OLLAMA_HOST });
 
-const REQUEST_TIMEOUT = 900000; // 15 minutes
+const REQUEST_TIMEOUT = 43200000; // 12 hours
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 10000; // 10 seconds
 
